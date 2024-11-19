@@ -890,15 +890,6 @@ async def send_user_config(callback_query: types.CallbackQuery):
             asyncio.create_task(delete_message_after_delay(admin, sent_message.message_id, delay=15))
             await callback_query.answer()
             return
-        #else:
-            #confirmation_text = f"Конфигурация для **{username}** отправлена."
-            #sent_confirmation = await bot.send_message(
-                #chat_id=admin,
-                #text=confirmation_text,
-                #parse_mode="Markdown",
-                #disable_notification=True
-            #)
-            #asyncio.create_task(delete_message_after_delay(admin, sent_confirmation.message_id, delay=15))
     except Exception as e:
         confirmation_text = f"Произошла ошибка."
         sent_message = await bot.send_message(admin, confirmation_text, parse_mode="Markdown", disable_notification=True)
