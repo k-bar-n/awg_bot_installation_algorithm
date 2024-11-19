@@ -35,12 +35,14 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler(timezone=pytz.UTC)
 scheduler.start()
+
 main_menu_markup = InlineKeyboardMarkup(row_width=1).add(
     InlineKeyboardButton("Добавить пользователя", callback_data="add_user"),
     InlineKeyboardButton("Получить конфигурацию пользователя", callback_data="get_config"),
     InlineKeyboardButton("Список клиентов", callback_data="list_users"),
     InlineKeyboardButton("Создать бекап", callback_data="create_backup")
 )
+
 user_main_messages = {}
 isp_cache = {}
 ISP_CACHE_FILE = 'isp_cache.json'
@@ -218,6 +220,7 @@ async def restart_wireguard():
         )
         stdout_strip, stderr_strip = await process_strip.communicate()
         if process_strip.returncode != 0:
+            logger.error(f"Strip WireGuard конфигурации не удался: {stderr_strip.decode()}")
             return False
         with tempfile.NamedTemporaryFile(delete=False) as temp_config:
             temp_config.write(stdout_strip)
@@ -230,10 +233,12 @@ async def restart_wireguard():
         stdout_syncconf, stderr_syncconf = await process_syncconf.communicate()
         if process_syncconf.returncode != 0:
             os.unlink(temp_config_path)
+            logger.error(f"Syncconf WireGuard не удался: {stderr_syncconf.decode()}")
             return False
         os.unlink(temp_config_path)
         return True
-    except:
+    except Exception as e:
+        logger.error(f"Ошибка при перезапуске WireGuard: {e}")
         return False
 
 def create_zip(backup_filepath):
@@ -420,7 +425,7 @@ async def set_config_duration(callback: types.CallbackQuery):
     elif duration_choice == 'unlimited':
         duration = None
     else:
-        await bot.send_message(admin, "Неверный выбор времени.", reply_markup=main_menu_markup)
+        await bot.send_message(admin, "Неверный выбор времени.", reply_markup=main_menu_markup, disable_notification=True)
         asyncio.create_task(delete_message_after_delay(admin, main_message_id, delay=2))
         return
     if ipv6_flag == 'ipv6':
@@ -429,18 +434,23 @@ async def set_config_duration(callback: types.CallbackQuery):
         success = db.root_add(client_name, ipv6=False)
     if success:
         try:
-            with open(f'png/{client_name}.png', 'rb') as pfoto, open(f'conf/{client_name}.conf', 'rb') as file:
-                sent_photo = await bot.send_photo(admin, pfoto, disable_notification=True)
-                sent_doc = await bot.send_document(admin, file, disable_notification=True)
-                asyncio.create_task(delete_message_after_delay(admin, sent_photo.message_id, delay=15))
-                asyncio.create_task(delete_message_after_delay(admin, sent_doc.message_id, delay=15))
+            conf_path = f'conf/{client_name}.conf'
+            png_path = f'png/{client_name}.png'
+            if os.path.exists(conf_path):
+                with open(conf_path, 'rb') as config:
+                    sent_doc = await bot.send_document(admin, config, disable_notification=True)
+                    asyncio.create_task(delete_message_after_delay(admin, sent_doc.message_id, delay=15))
+            if os.path.exists(png_path):
+                with open(png_path, 'rb') as photo:
+                    sent_photo = await bot.send_photo(admin, photo, disable_notification=True)
+                    asyncio.create_task(delete_message_after_delay(admin, sent_photo.message_id, delay=15))
         except FileNotFoundError:
             confirmation_text = "Не удалось найти файлы конфигурации для указанного пользователя."
             sent_message = await bot.send_message(admin, confirmation_text, parse_mode="Markdown", disable_notification=True)
             asyncio.create_task(delete_message_after_delay(admin, sent_message.message_id, delay=15))
             await callback_query.answer()
             return
-        except:
+        except Exception as e:
             confirmation_text = "Произошла ошибка."
             sent_message = await bot.send_message(admin, confirmation_text, parse_mode="Markdown", disable_notification=True)
             asyncio.create_task(delete_message_after_delay(admin, sent_message.message_id, delay=15))
@@ -730,6 +740,15 @@ async def client_delete_callback(callback_query: types.CallbackQuery):
             scheduler.remove_job(job_id=username)
         except:
             pass
+        conf_path = f'conf/{username}.conf'
+        png_path = f'png/{username}.png'
+        try:
+            if os.path.exists(conf_path):
+                os.remove(conf_path)
+            if os.path.exists(png_path):
+                os.remove(png_path)
+        except Exception as e:
+            logger.error(f"Ошибка при удалении файлов для пользователя {username}: {e}")
         confirmation_text = f"Пользователь **{username}** успешно удален."
     else:
         confirmation_text = f"Не удалось удалить пользователя **{username}**."
@@ -853,24 +872,41 @@ async def send_user_config(callback_query: types.CallbackQuery):
         return
     _, username = callback_query.data.split('send_config_', 1)
     username = username.strip()
+    sent_messages = []
     try:
-        with open(f'png/{username}.png', 'rb') as photo, open(f'conf/{username}.conf', 'rb') as config:
-            sent_photo = await bot.send_photo(admin, photo, disable_notification=True)
-            sent_doc = await bot.send_document(admin, config, disable_notification=True)
-            asyncio.create_task(delete_message_after_delay(admin, sent_photo.message_id, delay=15))
-            asyncio.create_task(delete_message_after_delay(admin, sent_doc.message_id, delay=15))
-    except FileNotFoundError:
-        confirmation_text = f"Не удалось найти файлы конфигурации для пользователя **{username}**."
-        sent_message = await bot.send_message(admin, confirmation_text, parse_mode="Markdown", disable_notification=True)
-        asyncio.create_task(delete_message_after_delay(admin, sent_message.message_id, delay=15))
-        await callback_query.answer()
-        return
+        conf_path = f'conf/{username}.conf'
+        if os.path.exists(conf_path):
+            with open(conf_path, 'rb') as config:
+                sent_doc = await bot.send_document(admin, config, disable_notification=True)
+                sent_messages.append(sent_doc.message_id)
+        png_path = f'png/{username}.png'
+        if os.path.exists(png_path):
+            with open(png_path, 'rb') as photo:
+                sent_photo = await bot.send_photo(admin, photo, disable_notification=True)
+                sent_messages.append(sent_photo.message_id)
+        if not sent_messages:
+            confirmation_text = f"Не удалось найти файлы конфигурации для пользователя **{username}**."
+            sent_message = await bot.send_message(admin, confirmation_text, parse_mode="Markdown", disable_notification=True)
+            asyncio.create_task(delete_message_after_delay(admin, sent_message.message_id, delay=15))
+            await callback_query.answer()
+            return
+        #else:
+            #confirmation_text = f"Конфигурация для **{username}** отправлена."
+            #sent_confirmation = await bot.send_message(
+                #chat_id=admin,
+                #text=confirmation_text,
+                #parse_mode="Markdown",
+                #disable_notification=True
+            #)
+            #asyncio.create_task(delete_message_after_delay(admin, sent_confirmation.message_id, delay=15))
     except Exception as e:
         confirmation_text = f"Произошла ошибка."
         sent_message = await bot.send_message(admin, confirmation_text, parse_mode="Markdown", disable_notification=True)
         asyncio.create_task(delete_message_after_delay(admin, sent_message.message_id, delay=15))
         await callback_query.answer()
         return
+    for message_id in sent_messages:
+        asyncio.create_task(delete_message_after_delay(admin, message_id, delay=15))
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "create_backup")
@@ -884,8 +920,12 @@ async def create_backup_callback(callback_query: types.CallbackQuery):
     try:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, create_zip, backup_filepath)
-        with open(backup_filepath, 'rb') as f:
-            await bot.send_document(admin, f, caption=backup_filename, disable_notification=True)
+        if os.path.exists(backup_filepath):
+            with open(backup_filepath, 'rb') as f:
+                await bot.send_document(admin, f, caption=backup_filename, disable_notification=True)
+        else:
+            logger.error(f"Бекап файл не создан: {backup_filepath}")
+            await bot.send_message(admin, "Не удалось создать бекап.", disable_notification=True)
     except Exception as e:
         logger.error(f"Ошибка при создании бекапа: {e}")
         await bot.send_message(admin, "Не удалось создать бекап.", disable_notification=True)
@@ -898,6 +938,15 @@ async def process_unknown_callback(callback_query: types.CallbackQuery):
 async def deactivate_user(client_name: str):
     success = db.deactive_user_db(client_name)
     if success:
+        conf_path = f'conf/{client_name}.conf'
+        png_path = f'png/{client_name}.png'
+        try:
+            if os.path.exists(conf_path):
+                os.remove(conf_path)
+            if os.path.exists(png_path):
+                os.remove(png_path)
+        except Exception as e:
+            logger.error(f"Ошибка при удалении файлов для пользователя {client_name}: {e}")
         sent_message = await bot.send_message(admin, f"Конфигурация пользователя **{client_name}** истекла и была деактивирована.", parse_mode="Markdown", disable_notification=True)
         asyncio.create_task(delete_message_after_delay(admin, sent_message.message_id, delay=15))
         db.remove_user_expiration(client_name)
