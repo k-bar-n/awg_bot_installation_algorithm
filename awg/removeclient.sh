@@ -29,4 +29,6 @@ $WG_CMD syncconf $(basename "$WG_CONFIG_FILE" .conf) <($WG_QUICK_CMD strip $(bas
 
 rm -f "users/$CLIENT_NAME/$CLIENT_NAME.conf" "users/$CLIENT_NAME/$CLIENT_NAME.png"
 
+rmdir "users/$CLIENT_NAME"
+
 echo "Client $CLIENT_NAME successfully removed from WireGuard"
