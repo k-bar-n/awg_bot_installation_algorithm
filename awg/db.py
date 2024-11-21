@@ -5,17 +5,18 @@ import json
 from datetime import datetime
 import pytz
 
-EXPIRATIONS_FILE = 'expirations.json'
+EXPIRATIONS_FILE = 'files/expirations.json'
 UTC = pytz.UTC
 
-def create_config(path='setting.ini'):
+def create_config(path='files/setting.ini'):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     config = configparser.ConfigParser()
     config.add_section("setting")
 
     bot_token = input('Введите токен Telegram бота: ').strip()
     admin_id = input('Введите Telegram ID администратора: ').strip()
     wg_config_file = input('Введите путь к файлу конфигурации WireGuard (например, /etc/wireguard/wg0.conf): ').strip()
-    endpoint = input('Введите ENDPOINT (IP-адрес сервера): ').strip()
+    endpoint = input('Введите Endpoint (IP-адрес сервера): ').strip()
 
     config.set("setting", "bot_token", bot_token)
     config.set("setting", "admin_id", admin_id)
@@ -26,9 +27,8 @@ def create_config(path='setting.ini'):
         config.write(config_file)
 
 def save_client_endpoint(username, endpoint):
-    if not os.path.exists('connections'):
-        os.makedirs('connections')
-    file_path = os.path.join('connections', f'{username}_ip.json')
+    os.makedirs('files/connections', exist_ok=True)
+    file_path = os.path.join('files', 'connections', f'{username}_ip.json')
     timestamp = datetime.now().strftime('%d.%m.%Y %H:%M')
     ip_address = endpoint.split(':')[0]
 
@@ -46,7 +46,7 @@ def save_client_endpoint(username, endpoint):
     with open(file_path, 'w') as f:
         json.dump(data, f)
 
-def get_config(path='setting.ini'):
+def get_config(path='files/setting.ini'):
     if not os.path.exists(path):
         create_config(path)
 
@@ -167,6 +167,7 @@ def load_expirations():
             return {}
 
 def save_expirations(expirations):
+    os.makedirs(os.path.dirname(EXPIRATIONS_FILE), exist_ok=True)
     data = {user: (ts.isoformat() if ts else None) for user, ts in expirations.items()}
     with open(EXPIRATIONS_FILE, 'w') as f:
         json.dump(data, f)

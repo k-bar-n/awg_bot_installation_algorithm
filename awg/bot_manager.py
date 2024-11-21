@@ -7,6 +7,7 @@ import os
 import re
 import tempfile
 import json
+import subprocess
 from aiogram import Bot, types
 from aiogram.dispatcher import Dispatcher
 from aiogram.utils import executor
@@ -45,7 +46,7 @@ main_menu_markup = InlineKeyboardMarkup(row_width=1).add(
 
 user_main_messages = {}
 isp_cache = {}
-ISP_CACHE_FILE = 'isp_cache.json'
+ISP_CACHE_FILE = 'files/isp_cache.json'
 CACHE_TTL = timedelta(hours=24)
 
 async def load_isp_cache():
@@ -98,7 +99,7 @@ async def cleanup_isp_cache():
     await save_isp_cache()
 
 async def cleanup_connection_data(username: str):
-    file_path = os.path.join('connections', f'{username}_ip.json')
+    file_path = os.path.join('files', 'connections', f'{username}_ip.json')
     if os.path.exists(file_path):
         async with aiofiles.open(file_path, 'r') as f:
             try:
@@ -243,13 +244,19 @@ async def restart_wireguard():
 
 def create_zip(backup_filepath):
     with zipfile.ZipFile(backup_filepath, 'w') as zipf:
-        zipf.write(WG_CONFIG_FILE, os.path.basename(WG_CONFIG_FILE))
-        for folder in ['connections', 'conf', 'png']:
-            for root, dirs, files in os.walk(folder):
-                for file in files:
-                    filepath = os.path.join(root, file)
-                    arcname = os.path.relpath(filepath, os.getcwd())
-                    zipf.write(filepath, arcname)
+        for main_file in ['awg-decode.py', 'newclient.sh', 'removeclient.sh']:
+            if os.path.exists(main_file):
+                zipf.write(main_file, main_file)
+        for root, dirs, files in os.walk('files'):
+            for file in files:
+                filepath = os.path.join(root, file)
+                arcname = os.path.relpath(filepath, os.getcwd())
+                zipf.write(filepath, arcname)
+        for root, dirs, files in os.walk('users'):
+            for file in files:
+                filepath = os.path.join(root, file)
+                arcname = os.path.relpath(filepath, os.getcwd())
+                zipf.write(filepath, arcname)
 
 async def delete_message_after_delay(chat_id: int, message_id: int, delay: int):
     await asyncio.sleep(delay)
@@ -374,6 +381,7 @@ async def connect_user(callback: types.CallbackQuery):
             chat_id=main_chat_id,
             message_id=main_message_id,
             text="Выберите время действия конфигурации:",
+            parse_mode="Markdown",
             reply_markup=duration_markup
         )
     else:
@@ -434,16 +442,40 @@ async def set_config_duration(callback: types.CallbackQuery):
         success = db.root_add(client_name, ipv6=False)
     if success:
         try:
-            conf_path = f'conf/{client_name}.conf'
-            png_path = f'png/{client_name}.png'
-            if os.path.exists(conf_path):
-                with open(conf_path, 'rb') as config:
-                    sent_doc = await bot.send_document(admin, config, disable_notification=True)
-                    asyncio.create_task(delete_message_after_delay(admin, sent_doc.message_id, delay=15))
+            conf_path = os.path.join('users', client_name, f'{client_name}.conf')
+            png_path = os.path.join('users', client_name, f'{client_name}.png')
+            
             if os.path.exists(png_path):
                 with open(png_path, 'rb') as photo:
                     sent_photo = await bot.send_photo(admin, photo, disable_notification=True)
                     asyncio.create_task(delete_message_after_delay(admin, sent_photo.message_id, delay=15))
+            
+            vpn_key = ""
+            if os.path.exists(conf_path):
+                vpn_key = await generate_vpn_key(conf_path)
+            
+            if vpn_key:
+                instruction_text = (
+                    "\nAmneziaWG [Google play](https://play.google.com/store/apps/details?id=org.amnezia.awg&hl=ru), "
+                    "[GitHub](https://github.com/amnezia-vpn/amneziawg-android)\n"
+                    "AmneziaVPN [Google play](https://play.google.com/store/apps/details?id=org.amnezia.vpn&hl=ru), "
+                    "[GitHub](https://github.com/amnezia-vpn/amnezia-client)\n"
+                )
+                caption = f"\n{instruction_text}\n```{vpn_key}```"
+            else:
+                caption = "VPN ключ не был сгенерирован."
+    
+            if os.path.exists(conf_path):
+                with open(conf_path, 'rb') as config:
+                    sent_doc = await bot.send_document(
+                        admin,
+                        config,
+                        caption=caption,
+                        parse_mode="Markdown",
+                        disable_notification=True
+                    )
+                    asyncio.create_task(delete_message_after_delay(admin, sent_doc.message_id, delay=15))
+        
         except FileNotFoundError:
             confirmation_text = "Не удалось найти файлы конфигурации для указанного пользователя."
             sent_message = await bot.send_message(admin, confirmation_text, parse_mode="Markdown", disable_notification=True)
@@ -492,6 +524,30 @@ async def set_config_duration(callback: types.CallbackQuery):
         reply_markup=main_menu_markup
     )
     await callback.answer()
+
+async def generate_vpn_key(conf_path: str) -> str:
+    try:
+        process = await asyncio.create_subprocess_exec(
+            'python3.11',
+            'awg-decode.py',
+            '--encode',
+            conf_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode != 0:
+            logger.error(f"awg-decode.py ошибка: {stderr.decode().strip()}")
+            return ""
+        vpn_key = stdout.decode().strip()
+        if vpn_key.startswith('vpn://'):
+            return vpn_key
+        else:
+            logger.error(f"awg-decode.py вернул некорректный формат: {vpn_key}")
+            return ""
+    except Exception as e:
+        logger.error(f"Ошибка при вызове awg-decode.py: {e}")
+        return ""
 
 @dp.callback_query_handler(lambda c: c.data.startswith('list_users'))
 async def list_users_callback(callback_query: types.CallbackQuery):
@@ -636,7 +692,7 @@ async def client_selected_callback(callback_query: types.CallbackQuery):
 async def client_connections_callback(callback_query: types.CallbackQuery):
     _, username = callback_query.data.split('connections_', 1)
     username = username.strip()
-    file_path = os.path.join('connections', f'{username}_ip.json')
+    file_path = os.path.join('files', 'connections', f'{username}_ip.json')
     if not os.path.exists(file_path):
         await callback_query.answer("Нет данных о подключениях пользователя.", show_alert=True)
         return
@@ -740,8 +796,8 @@ async def client_delete_callback(callback_query: types.CallbackQuery):
             scheduler.remove_job(job_id=username)
         except:
             pass
-        conf_path = f'conf/{username}.conf'
-        png_path = f'png/{username}.png'
+        conf_path = os.path.join('users', username, f'{username}.conf')
+        png_path = os.path.join('users', username, f'{username}.png')
         try:
             if os.path.exists(conf_path):
                 os.remove(conf_path)
@@ -874,28 +930,59 @@ async def send_user_config(callback_query: types.CallbackQuery):
     username = username.strip()
     sent_messages = []
     try:
-        conf_path = f'conf/{username}.conf'
-        if os.path.exists(conf_path):
-            with open(conf_path, 'rb') as config:
-                sent_doc = await bot.send_document(admin, config, disable_notification=True)
-                sent_messages.append(sent_doc.message_id)
-        png_path = f'png/{username}.png'
+        png_path = os.path.join('users', username, f'{username}.png')
         if os.path.exists(png_path):
             with open(png_path, 'rb') as photo:
                 sent_photo = await bot.send_photo(admin, photo, disable_notification=True)
                 sent_messages.append(sent_photo.message_id)
-        if not sent_messages:
-            confirmation_text = f"Не удалось найти файлы конфигурации для пользователя **{username}**."
-            sent_message = await bot.send_message(admin, confirmation_text, parse_mode="Markdown", disable_notification=True)
-            asyncio.create_task(delete_message_after_delay(admin, sent_message.message_id, delay=15))
-            await callback_query.answer()
-            return
+
+        conf_path = os.path.join('users', username, f'{username}.conf')
+        if os.path.exists(conf_path):
+            vpn_key = await generate_vpn_key(conf_path)
+            if vpn_key:
+                instruction_text = (
+                    "\nAmneziaWG [Google play](https://play.google.com/store/apps/details?id=org.amnezia.awg&hl=ru), "
+                    "[GitHub](https://github.com/amnezia-vpn/amneziawg-android)\n"
+                    "AmneziaVPN [Google play](https://play.google.com/store/apps/details?id=org.amnezia.vpn&hl=ru), "
+                    "[GitHub](https://github.com/amnezia-vpn/amnezia-client)\n"
+                )
+                caption = f"\n{instruction_text}\n```{vpn_key}```"
+            else:
+                caption = "VPN ключ не был сгенерирован."
+
+            with open(conf_path, 'rb') as config:
+                sent_doc = await bot.send_document(
+                    admin,
+                    config,
+                    caption=caption,
+                    parse_mode="Markdown",
+                    disable_notification=True
+                )
+                sent_messages.append(sent_doc.message_id)
+        
     except Exception as e:
         confirmation_text = f"Произошла ошибка."
         sent_message = await bot.send_message(admin, confirmation_text, parse_mode="Markdown", disable_notification=True)
         asyncio.create_task(delete_message_after_delay(admin, sent_message.message_id, delay=15))
         await callback_query.answer()
         return
+
+    if not sent_messages:
+        confirmation_text = f"Не удалось найти файлы конфигурации для пользователя **{username}**."
+        sent_message = await bot.send_message(admin, confirmation_text, parse_mode="Markdown", disable_notification=True)
+        asyncio.create_task(delete_message_after_delay(admin, sent_message.message_id, delay=15))
+        await callback_query.answer()
+        return
+    else:
+        confirmation_text = f"Конфигурация для **{username}** отправлена."
+        sent_confirmation = await bot.send_message(
+            chat_id=admin,
+            text=confirmation_text,
+            parse_mode="Markdown",
+            disable_notification=True
+        )
+        asyncio.create_task(delete_message_after_delay(admin, sent_confirmation.message_id, delay=15))
+    
     for message_id in sent_messages:
         asyncio.create_task(delete_message_after_delay(admin, message_id, delay=15))
     await callback_query.answer()
@@ -929,8 +1016,8 @@ async def process_unknown_callback(callback_query: types.CallbackQuery):
 async def deactivate_user(client_name: str):
     success = db.deactive_user_db(client_name)
     if success:
-        conf_path = f'conf/{client_name}.conf'
-        png_path = f'png/{client_name}.png'
+        conf_path = os.path.join('users', client_name, f'{client_name}.conf')
+        png_path = os.path.join('users', client_name, f'{client_name}.png')
         try:
             if os.path.exists(conf_path):
                 os.remove(conf_path)
@@ -946,6 +1033,8 @@ async def deactivate_user(client_name: str):
         asyncio.create_task(delete_message_after_delay(admin, sent_message.message_id, delay=15))
 
 async def on_startup(dp):
+    os.makedirs('files/connections', exist_ok=True)
+    os.makedirs('users', exist_ok=True)
     await load_isp_cache_task()
     users = db.get_users_with_expiration()
     for user in users:

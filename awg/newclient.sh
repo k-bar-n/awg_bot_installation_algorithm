@@ -52,7 +52,7 @@ fi
 
 pwd=$(pwd)
 
-mkdir -p "$pwd/conf" "$pwd/png"
+mkdir -p "$pwd/users/$CLIENT_NAME"
 
 key=$($WG_CMD genkey)
 psk=$($WG_CMD genpsk)
@@ -101,9 +101,7 @@ if [ "$IPV6" == "yes" ]; then
     fi
 
     prefix=$(echo "$ipv6_subnet" | sed 's/\(.*\)::.*$/\1::/')
-
     ipv6_subnet_escaped=$(echo "$ipv6_subnet" | sed 's/:/\\:/g')
-
     existing_ipv6=$(grep -E "^AllowedIPs\s*=\s*10\.0\.0\.\d+/32,\s*${ipv6_subnet_escaped}[0-9a-fA-F]+/128" "$WG_CONFIG_FILE" | awk -F',' '{print $2}' | awk '{print $1}' | sed "s|${prefix}||" | sed 's|/128||')
 
     max_host=1
@@ -140,7 +138,7 @@ EOF
 
 if [ "$IPV6" == "yes" ]; then
     listen_port=$(awk '/ListenPort\s*=/ {print $3}' "$WG_CONFIG_FILE")
-    cat << EOF > "$pwd/conf/$CLIENT_NAME.conf"
+    cat << EOF > "$pwd/users/$CLIENT_NAME/$CLIENT_NAME.conf"
 [Interface]
 Address = 10.0.0.$octet/32, ${client_ipv6}
 DNS = 8.8.8.8
@@ -148,7 +146,7 @@ PrivateKey = $key
 EOF
 
     if [[ "$WG_CONFIG_FILE" == *amnezia* ]]; then
-        cat << EOF >> "$pwd/conf/$CLIENT_NAME.conf"
+        cat << EOF >> "$pwd/users/$CLIENT_NAME/$CLIENT_NAME.conf"
 Jc = 4
 Jmin = 15
 Jmax = 1268
@@ -161,7 +159,7 @@ H4 = 2137162994
 EOF
     fi
 
-    cat << EOF >> "$pwd/conf/$CLIENT_NAME.conf"
+    cat << EOF >> "$pwd/users/$CLIENT_NAME/$CLIENT_NAME.conf"
 [Peer]
 PublicKey = $server_public_key
 PresharedKey = $psk
@@ -171,7 +169,7 @@ PersistentKeepalive = 25
 EOF
 else
     listen_port=$(awk '/ListenPort\s*=/ {print $3}' "$WG_CONFIG_FILE")
-    cat << EOF > "$pwd/conf/$CLIENT_NAME.conf"
+    cat << EOF > "$pwd/users/$CLIENT_NAME/$CLIENT_NAME.conf"
 [Interface]
 Address = 10.0.0.$octet/32
 DNS = 8.8.8.8
@@ -179,7 +177,7 @@ PrivateKey = $key
 EOF
 
     if [[ "$WG_CONFIG_FILE" == *amnezia* ]]; then
-        cat << EOF >> "$pwd/conf/$CLIENT_NAME.conf"
+        cat << EOF >> "$pwd/users/$CLIENT_NAME/$CLIENT_NAME.conf"
 Jc = 4
 Jmin = 15
 Jmax = 1268
@@ -192,7 +190,7 @@ H4 = 2137162994
 EOF
     fi
 
-    cat << EOF >> "$pwd/conf/$CLIENT_NAME.conf"
+    cat << EOF >> "$pwd/users/$CLIENT_NAME/$CLIENT_NAME.conf"
 [Peer]
 PublicKey = $server_public_key
 PresharedKey = $psk
@@ -202,7 +200,7 @@ PersistentKeepalive = 25
 EOF
 fi
 
-qrencode -l L < "$pwd/conf/$CLIENT_NAME.conf" -o "$pwd/png/$CLIENT_NAME.png"
+qrencode -l L < "$pwd/users/$CLIENT_NAME/$CLIENT_NAME.conf" -o "$pwd/users/$CLIENT_NAME/$CLIENT_NAME.png"
 
 $WG_CMD addconf "$(basename "$WG_CONFIG_FILE" .conf)" <(sed -n "/^# BEGIN_PEER $CLIENT_NAME$/, /^# END_PEER $CLIENT_NAME$/p" "$WG_CONFIG_FILE")
 

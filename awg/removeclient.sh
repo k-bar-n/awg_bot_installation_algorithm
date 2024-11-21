@@ -27,4 +27,6 @@ sed -i "/^# BEGIN_PEER $CLIENT_NAME$/, /^# END_PEER $CLIENT_NAME$/d" "$WG_CONFIG
 
 $WG_CMD syncconf $(basename "$WG_CONFIG_FILE" .conf) <($WG_QUICK_CMD strip $(basename "$WG_CONFIG_FILE" .conf))
 
+rm -f "users/$CLIENT_NAME/$CLIENT_NAME.conf" "users/$CLIENT_NAME/$CLIENT_NAME.png"
+
 echo "Client $CLIENT_NAME successfully removed from WireGuard"
