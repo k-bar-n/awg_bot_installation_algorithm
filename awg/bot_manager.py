@@ -456,7 +456,8 @@ async def set_config_duration(callback: types.CallbackQuery):
             
             if vpn_key:
                 instruction_text = (
-                    "\nAmneziaWG [Google play](https://play.google.com/store/apps/details?id=org.amnezia.awg&hl=ru), "
+                    "\nWireGuard [Google play](https://play.google.com/store/apps/details?id=com.wireguard.android)\n"
+                    "AmneziaWG [Google play](https://play.google.com/store/apps/details?id=org.amnezia.awg&hl=ru), "
                     "[GitHub](https://github.com/amnezia-vpn/amneziawg-android)\n"
                     "AmneziaVPN [Google play](https://play.google.com/store/apps/details?id=org.amnezia.vpn&hl=ru), "
                     "[GitHub](https://github.com/amnezia-vpn/amnezia-client)\n"
@@ -941,7 +942,8 @@ async def send_user_config(callback_query: types.CallbackQuery):
             vpn_key = await generate_vpn_key(conf_path)
             if vpn_key:
                 instruction_text = (
-                    "\nAmneziaWG [Google play](https://play.google.com/store/apps/details?id=org.amnezia.awg&hl=ru), "
+                    "\nWireGuard [Google play](https://play.google.com/store/apps/details?id=com.wireguard.android)\n"
+                    "AmneziaWG [Google play](https://play.google.com/store/apps/details?id=org.amnezia.awg&hl=ru), "
                     "[GitHub](https://github.com/amnezia-vpn/amneziawg-android)\n"
                     "AmneziaVPN [Google play](https://play.google.com/store/apps/details?id=org.amnezia.vpn&hl=ru), "
                     "[GitHub](https://github.com/amnezia-vpn/amnezia-client)\n"

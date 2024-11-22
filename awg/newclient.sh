@@ -204,4 +204,7 @@ qrencode -l L < "$pwd/users/$CLIENT_NAME/$CLIENT_NAME.conf" -o "$pwd/users/$CLIE
 
 $WG_CMD addconf "$(basename "$WG_CONFIG_FILE" .conf)" <(sed -n "/^# BEGIN_PEER $CLIENT_NAME$/, /^# END_PEER $CLIENT_NAME$/p" "$WG_CONFIG_FILE")
 
+$WG_QUICK_CMD down "$(basename "$WG_CONFIG_FILE" .conf)"
+$WG_QUICK_CMD up "$(basename "$WG_CONFIG_FILE" .conf)"
+
 echo "Client $CLIENT_NAME successfully added to WireGuard"
