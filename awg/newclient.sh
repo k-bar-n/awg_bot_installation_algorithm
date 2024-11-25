@@ -40,15 +40,22 @@ if [[ ! "$CLIENT_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
     exit 1
 fi
 
-internal_subnet=$(awk '/^\[Interface\]/ {flag=1; next} /^\[/ {flag=0} flag && /^Address\s*=/ {
-    for(i=1;i<=NF;i++) {
-        if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/) {
-            split($i, a, "/")
-            print a[1]"/"$2
-            exit
+internal_subnet=$(awk '
+    /^\[Interface\]/ {flag=1; next}
+    /^\[/ {flag=0}
+    flag && /^Address\s*=/ {
+        sub(/^Address\s*=\s*/, "")
+        n = split($0, addr, ",")
+        for(i=1;i<=n;i++) {
+            gsub(/^[ \t]+|[ \t]+$/, "", addr[i])
+            if (addr[i] ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/) {
+                split(addr[i], a, "/")
+                print a[1]"/"a[2]
+                exit
+            }
         }
     }
-}' "$WG_CONFIG_FILE")
+' "$WG_CONFIG_FILE")
 
 if [ -z "$internal_subnet" ]; then
     echo "Error: Internal IPv4 subnet not found in WireGuard configuration."
