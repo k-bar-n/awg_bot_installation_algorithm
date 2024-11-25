@@ -2,29 +2,83 @@ import os
 import subprocess
 import configparser
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
+import glob
+import sys
 
 EXPIRATIONS_FILE = 'files/expirations.json'
 UTC = pytz.UTC
 
 def create_config(path='files/setting.ini'):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    config = configparser.ConfigParser()
-    config.add_section("setting")
-
-    bot_token = input('Введите токен Telegram бота: ').strip()
-    admin_id = input('Введите Telegram ID администратора: ').strip()
-    wg_config_file = input('Введите путь к файлу конфигурации WireGuard (например, /etc/wireguard/wg0.conf): ').strip()
-    endpoint = input('Введите Endpoint (IP-адрес сервера): ').strip()
-
-    config.set("setting", "bot_token", bot_token)
-    config.set("setting", "admin_id", admin_id)
-    config.set("setting", "wg_config_file", wg_config_file)
-    config.set("setting", "endpoint", endpoint)
-
-    with open(path, "w") as config_file:
-        config.write(config_file)
+    wireguard_dir = "/etc/wireguard"
+    amnezia_dir = "/etc/amnezia/amneziawg"
+    conf_files = []
+    
+    for dir_path in [wireguard_dir, amnezia_dir]:
+        if os.path.exists(dir_path):
+            conf_files.extend(glob.glob(os.path.join(dir_path, "*.conf")))
+    
+    selected_conf = None
+    if conf_files:
+        print("Выберите конфигурационный файл:")
+        for idx, conf in enumerate(conf_files, 1):
+            print(f"{idx}) {conf}")
+        while True:
+            choice = input("Введите номер: ").strip()
+            if not choice:
+                choice = "1"
+            if choice.isdigit() and 1 <= int(choice) <= len(conf_files):
+                selected_conf = conf_files[int(choice) -1]
+                break
+            else:
+                print("Неверный выбор. Пожалуйста, введите корректный номер.")
+    else:
+        dirs_exist = False
+        for dir_path in [wireguard_dir, amnezia_dir]:
+            if os.path.exists(dir_path):
+                dirs_exist = True
+                confs = glob.glob(os.path.join(dir_path, "*.conf"))
+                if not confs:
+                    config_type = "AmneziaWG" if 'amnezia' in dir_path else "WireGuard"
+                    print(f"В системе установлен {config_type}, но не обнаружено конфигурационного файла.")
+                    print("Перейти к его созданию?")
+                    print("1) Да")
+                    print("2) Нет")
+                    while True:
+                        user_choice = input("Введите номер: ").strip()
+                        if user_choice == "1":
+                            subprocess.run(["./genconf.sh"])
+                            conf_files = glob.glob(os.path.join(dir_path, "*.conf"))
+                            if conf_files:
+                                selected_conf = conf_files[0]
+                                break
+                            else:
+                                print("Не удалось создать конфигурационный файл.")
+                                sys.exit(1)
+                        elif user_choice == "2":
+                            print("Инициализация не завершена.")
+                            sys.exit(0)
+                        else:
+                            print("Неверный выбор. Пожалуйста, введите 1 или 2.")
+        if not dirs_exist:
+            print("WireGuard или AmneziaWG не установлены в системе.")
+            print("Инициализация не завершена.")
+            sys.exit(0)
+    
+    bot_token = input("Введите токен Telegram бота: ").strip()
+    admin_id = input("Введите Telegram ID администратора: ").strip()
+    endpoint = input("Введите Endpoint (IP-адрес сервера): ").strip()
+    
+    os.makedirs("files", exist_ok=True)
+    with open(path, "w") as f:
+        config = configparser.ConfigParser()
+        config.add_section("setting")
+        config.set("setting", "bot_token", bot_token)
+        config.set("setting", "admin_id", admin_id)
+        config.set("setting", "wg_config_file", selected_conf)
+        config.set("setting", "endpoint", endpoint)
+        config.write(f)
 
 def save_client_endpoint(username, endpoint):
     os.makedirs('files/connections', exist_ok=True)

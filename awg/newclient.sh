@@ -40,13 +40,37 @@ if [[ ! "$CLIENT_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
     exit 1
 fi
 
+internal_subnet=$(awk '/^\[Interface\]/ {flag=1; next} /^\[/ {flag=0} flag && /^Address\s*=/ {
+    for(i=1;i<=NF;i++) {
+        if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/) {
+            split($i, a, "/")
+            print a[1]"/"$2
+            exit
+        }
+    }
+}' "$WG_CONFIG_FILE")
+
+if [ -z "$internal_subnet" ]; then
+    echo "Error: Internal IPv4 subnet not found in WireGuard configuration."
+    exit 1
+fi
+
+IFS='/' read -r subnet base_prefix <<< "$internal_subnet"
+IFS='.' read -r a b c d <<< "$subnet"
+
+if [ "$base_prefix" -ne 24 ]; then
+    echo "Error: Unsupported subnet prefix. Only /24 is supported."
+    exit 1
+fi
+
+base_subnet="${a}.${b}.${c}"
 octet=2
-while grep -E "AllowedIPs\s*=\s*10\.0\.0\.$octet/32" "$WG_CONFIG_FILE" > /dev/null; do
+while grep -E "AllowedIPs\s*=\s*$base_subnet\.$octet/32" "$WG_CONFIG_FILE" > /dev/null; do
     (( octet++ ))
 done
 
 if [ "$octet" -gt 254 ]; then
-    echo "Error: WireGuard internal subnet 10.0.0.0/24 is full"
+    echo "Error: WireGuard internal subnet $base_subnet.0/24 is full"
     exit 1
 fi
 
@@ -69,16 +93,25 @@ if [[ "$WG_CONFIG_FILE" == *amnezia* ]]; then
     h4=2137162994
 fi
 
+dns_servers=$(awk '/^\[Interface\]/ {flag=1; next} /^\[/ {flag=0} flag && /^DNS\s*=/ {
+    gsub(/DNS\s*=\s*/, "")
+    print
+    exit
+}' "$WG_CONFIG_FILE")
+
+if [ -z "$dns_servers" ]; then
+    echo "Error: DNS servers not found in WireGuard configuration."
+    exit 1
+fi
+
 if [ "$IPV6" == "yes" ]; then
     ipv6_subnet=$(awk '
         /^\[Interface\]/ {flag=1; next}
         /^\[/ {flag=0}
         flag && /^Address\s*=/ {
-            n=split($0, a, ",")
-            for(i=1;i<=n;i++) {
-                gsub(/^[ ]+|[ ]+$/, "", a[i])
-                if(a[i] ~ /:/) {
-                    split(a[i], b, "/")
+            for(i=1;i<=NF;i++) {
+                if ($i ~ /:/) {
+                    split($i, b, "/")
                     ipv6_addr=b[1]
                     if (match(ipv6_addr, /^(.*)::[0-9a-fA-F]+$/, arr)) {
                         print arr[1]"::/64"
@@ -102,7 +135,7 @@ if [ "$IPV6" == "yes" ]; then
 
     prefix=$(echo "$ipv6_subnet" | sed 's/\(.*\)::.*$/\1::/')
     ipv6_subnet_escaped=$(echo "$ipv6_subnet" | sed 's/:/\\:/g')
-    existing_ipv6=$(grep -E "^AllowedIPs\s*=\s*10\.0\.0\.\d+/32,\s*${ipv6_subnet_escaped}[0-9a-fA-F]+/128" "$WG_CONFIG_FILE" | awk -F',' '{print $2}' | awk '{print $1}' | sed "s|${prefix}||" | sed 's|/128||')
+    existing_ipv6=$(grep -E "^AllowedIPs\s*=\s*$base_subnet\.$octet/32,\s*${ipv6_subnet_escaped}[0-9a-fA-F]+/128" "$WG_CONFIG_FILE" | awk -F',' '{print $2}' | awk '{print $1}' | sed "s|${prefix}||" | sed 's|/128||')
 
     max_host=1
     for ip_suffix in $existing_ipv6; do
@@ -115,9 +148,9 @@ if [ "$IPV6" == "yes" ]; then
     done
     next_host_num=$((max_host +1))
     client_ipv6="${prefix}${next_host_num}/128"
-    ALLOWED_IPS="10.0.0.$octet/32, $client_ipv6"
+    ALLOWED_IPS="$base_subnet.$octet/32, $client_ipv6"
 else
-    ALLOWED_IPS="10.0.0.$octet/32"
+    ALLOWED_IPS="$base_subnet.$octet/32"
 fi
 
 server_private_key=$(awk '/^PrivateKey\s*=/ {print $3}' "$WG_CONFIG_FILE")
@@ -140,8 +173,8 @@ if [ "$IPV6" == "yes" ]; then
     listen_port=$(awk '/ListenPort\s*=/ {print $3}' "$WG_CONFIG_FILE")
     cat << EOF > "$pwd/users/$CLIENT_NAME/$CLIENT_NAME.conf"
 [Interface]
-Address = 10.0.0.$octet/32, ${client_ipv6}
-DNS = 8.8.8.8
+Address = $ALLOWED_IPS
+DNS = $dns_servers
 PrivateKey = $key
 EOF
 
@@ -171,8 +204,8 @@ else
     listen_port=$(awk '/ListenPort\s*=/ {print $3}' "$WG_CONFIG_FILE")
     cat << EOF > "$pwd/users/$CLIENT_NAME/$CLIENT_NAME.conf"
 [Interface]
-Address = 10.0.0.$octet/32
-DNS = 8.8.8.8
+Address = $ALLOWED_IPS
+DNS = $dns_servers
 PrivateKey = $key
 EOF
 
@@ -203,8 +236,5 @@ fi
 qrencode -l L < "$pwd/users/$CLIENT_NAME/$CLIENT_NAME.conf" -o "$pwd/users/$CLIENT_NAME/$CLIENT_NAME.png"
 
 $WG_CMD addconf "$(basename "$WG_CONFIG_FILE" .conf)" <(sed -n "/^# BEGIN_PEER $CLIENT_NAME$/, /^# END_PEER $CLIENT_NAME$/p" "$WG_CONFIG_FILE")
-
-$WG_QUICK_CMD down "$(basename "$WG_CONFIG_FILE" .conf)"
-$WG_QUICK_CMD up "$(basename "$WG_CONFIG_FILE" .conf)"
 
 echo "Client $CLIENT_NAME successfully added to WireGuard"

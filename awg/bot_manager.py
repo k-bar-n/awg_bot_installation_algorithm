@@ -835,27 +835,32 @@ async def client_block_callback(callback_query: types.CallbackQuery):
     else:
         await callback_query.answer("Неверная команда.", show_alert=True)
         return
+
     if action == 'block':
         success = await block_user(username)
-        if success:
-            confirmation_text = f"Пользователь **{username}** заблокирован."
-        else:
+        if not success:
             confirmation_text = f"Не удалось заблокировать пользователя **{username}**."
+        else:
+            confirmation_text = None
     else:
         success = await unblock_user(username)
-        if success:
-            confirmation_text = f"Пользователь **{username}** разблокирован."
-        else:
+        if not success:
             confirmation_text = f"Не удалось разблокировать пользователя **{username}**."
+        else:
+            confirmation_text = None
+
     callback_query.data = f'client_{username}'
     await client_selected_callback(callback_query)
-    sent_confirmation = await bot.send_message(
-        chat_id=admin,
-        text=confirmation_text,
-        parse_mode="Markdown",
-        disable_notification=True
-    )
-    asyncio.create_task(delete_message_after_delay(admin, sent_confirmation.message_id, delay=15))
+
+    if confirmation_text:
+        sent_confirmation = await bot.send_message(
+            chat_id=admin,
+            text=confirmation_text,
+            parse_mode="Markdown",
+            disable_notification=True
+        )
+        asyncio.create_task(delete_message_after_delay(admin, sent_confirmation.message_id, delay=15))
+
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "home")

@@ -60,7 +60,7 @@
 
     ```bash
     pip install -r requirements.txt
-    sudo apt update && sudo apt install qrencode -y
+    sudo apt update && sudo apt install qrencode net-tools -y
     ```
 
 4. Создайте бота в Telegram:
@@ -75,12 +75,6 @@
 
 ## Запуск
 
-#### Опционально
-
-Вы можете воспользоваться скриптом для генерации конфигурации, если настраиваете [WireGuard](https://www.wireguard.com) или [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module) в первый раз.
-
-    ./genconf.sh
-
 1. Запустите бота:
 
     ```bash
@@ -93,6 +87,10 @@
 ## Заметки
 
 При создании резервной копии, в архив добавляется директория connections (создается и содержит в себе логи подключений клиентов), conf, png, и сам конфигурационный файл. 
+
+Вы можете дополнительно воспользоваться скриптом для генерации конфигурации, для [WireGuard](https://www.wireguard.com) или [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module), если желаете добавить отдельные подсети/интерфейсы/конфигурационные файлы:
+
+    ./genconf.sh
 
 Так же, вы можете запускать бота как службу на вашем сервере. Для этого:
 1. Скопируйте файл `awg_bot.service` в директорию `/etc/systemd/system/`:
