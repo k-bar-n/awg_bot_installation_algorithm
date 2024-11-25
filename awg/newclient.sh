@@ -100,8 +100,8 @@ dns_servers=$(awk '/^\[Interface\]/ {flag=1; next} /^\[/ {flag=0} flag && /^DNS\
 }' "$WG_CONFIG_FILE")
 
 if [ -z "$dns_servers" ]; then
-    echo "Error: DNS servers not found in WireGuard configuration."
-    exit 1
+    dns_servers="8.8.8.8, 8.8.4.4"
+    echo "DNS servers not found in WireGuard configuration. Using default DNS 8.8.8.8."
 fi
 
 if [ "$IPV6" == "yes" ]; then

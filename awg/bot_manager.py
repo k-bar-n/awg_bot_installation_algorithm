@@ -8,16 +8,16 @@ import re
 import tempfile
 import json
 import subprocess
+import pytz
+import ipaddress
+import zipfile
 from aiogram import Bot, types
 from aiogram.dispatcher import Dispatcher
 from aiogram.utils import executor
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import datetime, timedelta
-import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
-import ipaddress
-import zipfile
 
 setting = db.get_config()
 bot = Bot(setting['bot_token'])
@@ -41,7 +41,8 @@ main_menu_markup = InlineKeyboardMarkup(row_width=1).add(
     InlineKeyboardButton("Добавить пользователя", callback_data="add_user"),
     InlineKeyboardButton("Получить конфигурацию пользователя", callback_data="get_config"),
     InlineKeyboardButton("Список клиентов", callback_data="list_users"),
-    InlineKeyboardButton("Создать бекап", callback_data="create_backup")
+    InlineKeyboardButton("Создать бекап", callback_data="create_backup"),
+    InlineKeyboardButton("Перезагрузить конфигурацию", callback_data="reload_config")
 )
 
 user_main_messages = {}
@@ -456,7 +457,8 @@ async def set_config_duration(callback: types.CallbackQuery):
             
             if vpn_key:
                 instruction_text = (
-                    "\nWireGuard [Google play](https://play.google.com/store/apps/details?id=com.wireguard.android)\n"
+                    "\nWireGuard [Google play](https://play.google.com/store/apps/details?id=com.wireguard.android), "
+                    "[Official Site](https://www.wireguard.com/install/)\n"
                     "AmneziaWG [Google play](https://play.google.com/store/apps/details?id=org.amnezia.awg&hl=ru), "
                     "[GitHub](https://github.com/amnezia-vpn/amneziawg-android)\n"
                     "AmneziaVPN [Google play](https://play.google.com/store/apps/details?id=org.amnezia.vpn&hl=ru), "
@@ -947,7 +949,8 @@ async def send_user_config(callback_query: types.CallbackQuery):
             vpn_key = await generate_vpn_key(conf_path)
             if vpn_key:
                 instruction_text = (
-                    "\nWireGuard [Google play](https://play.google.com/store/apps/details?id=com.wireguard.android)\n"
+                    "\nWireGuard [Google play](https://play.google.com/store/apps/details?id=com.wireguard.android), "
+                    "[Official Site](https://www.wireguard.com/install/)\n"
                     "AmneziaWG [Google play](https://play.google.com/store/apps/details?id=org.amnezia.awg&hl=ru), "
                     "[GitHub](https://github.com/amnezia-vpn/amneziawg-android)\n"
                     "AmneziaVPN [Google play](https://play.google.com/store/apps/details?id=org.amnezia.vpn&hl=ru), "
@@ -1015,6 +1018,72 @@ async def create_backup_callback(callback_query: types.CallbackQuery):
         logger.error(f"Ошибка при создании бекапа: {e}")
         await bot.send_message(admin, "Не удалось создать бекап.", disable_notification=True)
     await callback_query.answer()
+
+@dp.callback_query_handler(lambda c: c.data == "reload_config")
+async def reload_config_callback(callback_query: types.CallbackQuery):
+    if callback_query.from_user.id != admin:
+        await callback_query.answer("У вас нет прав для выполнения этого действия.", show_alert=True)
+        logger.warning(f"Пользователь {callback_query.from_user.id} попытался перезагрузить конфигурацию без прав.")
+        return
+
+    interface_name = os.path.basename(WG_CONFIG_FILE).split('.')[0]
+    logger.info(f"Начинается перезагрузка конфигурации для интерфейса: {interface_name}")
+
+    try:
+        process_down = await asyncio.create_subprocess_shell(
+            f"{WG_QUICK_CMD} down {interface_name}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout_down, stderr_down = await process_down.communicate()
+        if process_down.returncode != 0:
+            error_message = stderr_down.decode().strip()
+            logger.error(f"Ошибка при выполнении '{WG_QUICK_CMD} down {interface_name}': {error_message}")
+            raise Exception(f"Ошибка при выполнении '{WG_QUICK_CMD} down {interface_name}': {error_message}")
+        logger.info(f"Выполнена команда: {WG_QUICK_CMD} down {interface_name}")
+
+        process_up = await asyncio.create_subprocess_shell(
+            f"{WG_QUICK_CMD} up {interface_name}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout_up, stderr_up = await process_up.communicate()
+        if process_up.returncode != 0:
+            error_message = stderr_up.decode().strip()
+            logger.error(f"Ошибка при выполнении '{WG_QUICK_CMD} up {interface_name}': {error_message}")
+            raise Exception(f"Ошибка при выполнении '{WG_QUICK_CMD} up {interface_name}': {error_message}")
+        logger.info(f"Выполнена команда: {WG_QUICK_CMD} up {interface_name}")
+
+        logger.info(f"Конфигурация интерфейса {interface_name} успешно перезагружена.")
+
+    except Exception as e:
+        logger.exception(f"Ошибка при перезагрузке конфигурации: {e}")
+        await bot.send_message(admin, f"Ошибка при перезагрузке конфигурации: {e}", disable_notification=True)
+
+    finally:
+        main_chat_id, main_message_id = user_main_messages.get(admin, (None, None))
+        if main_chat_id and main_message_id:
+            try:
+                await bot.edit_message_text(
+                    chat_id=main_chat_id,
+                    message_id=main_message_id,
+                    text="Выберите действие:",
+                    reply_markup=main_menu_markup
+                )
+                logger.info("Главное меню обновлено после перезагрузки конфигурации.")
+            except MessageNotModified:
+                logger.info("Сообщение не изменилось при обновлении главного меню.")
+            except Exception as e:
+                logger.error(f"Ошибка при редактировании сообщения главного меню: {e}")
+        else:
+            try:
+                sent_message = await callback_query.message.reply("Выберите действие:", reply_markup=main_menu_markup)
+                user_main_messages[admin] = (sent_message.chat.id, sent_message.message_id)
+                await bot.pin_chat_message(chat_id=sent_message.chat.id, message_id=sent_message.message_id, disable_notification=True)
+                logger.info("Главное сообщение отправлено и закреплено после перезагрузки конфигурации.")
+            except Exception as e:
+                logger.error(f"Ошибка при отправке или закреплении главного сообщения: {e}")
+        await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: True)
 async def process_unknown_callback(callback_query: types.CallbackQuery):
