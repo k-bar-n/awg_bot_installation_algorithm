@@ -69,7 +69,6 @@ def create_config(path='files/setting.ini'):
     
     bot_token = input("Введите токен Telegram бота: ").strip()
     admin_id = input("Введите Telegram ID администратора: ").strip()
-#    endpoint = input("Введите Endpoint (IP-адрес сервера): ").strip()
     try:
         endpoint = subprocess.check_output("curl -s https://api.ipify.org", shell=True).decode().strip()
         socket.inet_aton(endpoint)
