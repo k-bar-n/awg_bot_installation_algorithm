@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import pytz
 import glob
 import sys
+import socket
 
 EXPIRATIONS_FILE = 'files/expirations.json'
 UTC = pytz.UTC
@@ -68,8 +69,14 @@ def create_config(path='files/setting.ini'):
     
     bot_token = input("Введите токен Telegram бота: ").strip()
     admin_id = input("Введите Telegram ID администратора: ").strip()
-    endpoint = input("Введите Endpoint (IP-адрес сервера): ").strip()
-    
+#    endpoint = input("Введите Endpoint (IP-адрес сервера): ").strip()
+    try:
+        endpoint = subprocess.check_output("curl -s https://api.ipify.org", shell=True).decode().strip()
+        socket.inet_aton(endpoint)
+    except (subprocess.CalledProcessError, socket.error):
+        print("Ошибка при определении внешнего IP-адреса сервера.")
+        endpoint = input('Не удалось автоматически определить внешний IP-адрес. Пожалуйста, введите его вручную: ').strip()
+ 
     os.makedirs("files", exist_ok=True)
     with open(path, "w") as f:
         config = configparser.ConfigParser()
