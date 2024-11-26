@@ -24,46 +24,7 @@
 
 1. Установите [WireGuard](https://www.wireguard.com) или [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module) (без данного шага бот РАБОТАТЬ НЕ БУДЕТ).
 
-2. Клонируйте репозиторий:
-
-    ```bash
-    git clone https://github.com/JB-SelfCompany/awg_bot.git
-    ```
-
-    Перейдите в репозиторий:
-
-    ```bash
-    cd awg_bot
-    ```
-
-  #### Опционально (рекомендуется устанавливать библиотеки в виртуальное окружение)
-  
-   Установка Python 3.11 для Linux:
-
-    sudo apt-get install software-properties-common -y && sudo add-apt-repository ppa:deadsnakes/ppa && sudo apt update && sudo apt install python3.11 python3.11-dev python3.11-venv -y
-
-   Установка Python 3.11 для Windows производится с официального [сайта](https://www.python.org/downloads/release/python-31110/). 
-    
-   Создайте и активируйте виртуальное окружение для Python:
-
-    python3.11 -m venv myenv
-        
-   Активация виртуального окружения для Linux:
-    
-    source myenv/bin/activate
-
-   Для Windows:
-  
-    python -m myenv\Scripts\activate
-
-3. Установите зависимости:
-
-    ```bash
-    pip install -r requirements.txt
-    sudo apt update && sudo apt install qrencode net-tools -y
-    ```
-
-4. Создайте бота в Telegram:
+2. Создайте бота в Telegram:
 
 - Откройте Telegram и найдите бота [BotFather](https://t.me/BotFather).
 - Начните диалог, отправив команду `/start`.
@@ -73,16 +34,15 @@
     - Придумать уникальное имя пользователя для бота (например, `WireGuardManagerBot_bot`). Оно должно оканчиваться на `_bot`.
 - После создания бота BotFather отправит вам токен для доступа к API. Его запросит бот во время первоначальной инициализации.
 
-## Запуск
-
-1. Запустите бота:
+3. Загрузите и запустите скрипт `install.sh`, с помощью которого будет автоматически установлен бот, со всеми зависимостями, в том числе, в качестве системной службы (автозапуск):
 
     ```bash
-    cd awg                            
-    python3.11 bot_manager.py              
+    curl -O https://raw.githubusercontent.com/JB-SelfCompany/awg_bot/main/install.sh && chmod +x install.sh && ./install.sh
     ```
+
+## Запуск
     
-2. Добавьте бота в Telegram и отправьте команду `/start` или `/help` для начала работы.
+1. Добавьте бота в Telegram и отправьте команду `/start` или `/help` для начала работы.
 
 ## Заметки
 
@@ -91,27 +51,6 @@
 Вы можете дополнительно воспользоваться скриптом для генерации конфигурации, для [WireGuard](https://www.wireguard.com) или [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module), если желаете добавить отдельные подсети/интерфейсы/конфигурационные файлы:
 
     ./genconf.sh
-
-Так же, вы можете запускать бота как службу на вашем сервере. Для этого:
-1. Скопируйте файл `awg_bot.service` в директорию `/etc/systemd/system/`:
-
-    ```bash
-    sudo cp awg_bot.service /etc/systemd/system/
-    ```
-
-2. Отредактируйте параметры внутри файла с помощью `nano` (или любого удобного текстового редактора):
-
-    ```bash
-    sudo nano /etc/systemd/system/awg_bot.service
-    ```
-    
-3. Перезагрузите системный демон и запустите службу:
-
-    ```bash
-    sudo systemctl daemon-reload
-    sudo systemctl start awg_bot.service
-    sudo systemctl enable awg_bot.service
-    ```
     
 **Важно:** Для корректной работы требуется запуск бота от имени пользователя с правами `sudo`, если [WireGuard](https://www.wireguard.com) / [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module) настроен с повышенными привилегиями. [WireGuard](https://www.wireguard.com) / [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module) должен быть настроен и запущен на сервере до использования бота.
 
