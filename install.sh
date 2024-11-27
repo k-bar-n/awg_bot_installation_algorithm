@@ -8,6 +8,11 @@ RED=$'\033[0;31m'
 BLUE=$'\033[0;34m'
 NC=$'\033[0m'
 
+# Определение абсолютного пути к скрипту
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_NAME="$(basename "$0")"
+SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_NAME"
+
 run_with_spinner() {
     local description="$1"
     shift
@@ -70,19 +75,19 @@ check_python() {
 }
 
 install_dependencies() {
-    run_with_spinner "Установка системных зависимостей" "sudo apt-get install qrencode net-tools iptables resolvconf git -y -qq"
+    run_with_spinner "Установка системных зависимостей" "sudo apt-get install qrencode jq net-tools iptables resolvconf git -y -qq"
 }
 
 install_and_configure_needrestart() {
     run_with_spinner "Установка needrestart" "sudo apt-get install needrestart -y -qq"
 
     sudo sed -i 's/^#\?\(nrconf{restart} = "\).*$/\1a";/' /etc/needrestart/needrestart.conf
-    grep -q 'nrconf{restart} = "a";' /etc/needrestart/needrestart.conf || echo 'nrconf{restart} = "a";' | sudo tee -a /etc/needrestart/needrestart.conf >/dev/null 2>&1
+    grep -q 'nrconf{restart} = "a";' /etc/needrestart/needrestart.conf || echo 'nrconf{restart} = "a";' | sudo tee /etc/needrestart/needrestart.conf >/dev/null 2>&1
 }
 
 clone_repository() {
     if [ ! -d "awg_bot" ]; then
-        run_with_spinner "Клонирование репозитория" "git clone https://github.com/JB-SelfCompany/awg_bot.git >/dev/null 2>&1"
+        run_with_spinner "Клонирование репозитория" "git clone https://github.com/JB-SelfCompany/awg-docker-bot.git >/dev/null 2>&1"
         if [ $? -ne 0 ]; then
             echo -e "\n${RED}Ошибка при клонировании репозитория. Завершение работы.${NC}"
             exit 1
@@ -91,7 +96,7 @@ clone_repository() {
     else
         echo -e "\n${YELLOW}Репозиторий уже существует. Пропуск клонирования.${NC}"
     fi
-    cd awg_bot || { echo -e "\n${RED}Не удалось перейти в директорию awg_bot. Завершение работы.${NC}"; exit 1; }
+    cd awg-docker-bot || { echo -e "\n${RED}Не удалось перейти в директорию awg-docker-bot. Завершение работы.${NC}"; exit 1; }
 }
 
 setup_venv() {
@@ -153,7 +158,7 @@ initialize_bot() {
 
 create_service() {
     run_with_spinner "Создание системной службы" "echo '[Unit]
-Description=AWG Telegram Bot
+Description=AmneziaVPN Docker Telegram Bot
 After=network.target
 
 [Service]
@@ -227,17 +232,19 @@ install_bot() {
 }
 
 main() {
-    echo -e "=== Установка AWG Telegram Bot ==="
+    echo -e "=== AWG Telegram Bot ==="
     echo -e "Начало установки..."
 
     if systemctl list-units --type=service --all | grep -q "$SERVICE_NAME.service"; then
-        echo -e "\n${YELLOW}Бот уже установлен в системе.${NC}"
+        echo -e "\n${YELLOW}Бот установлен в системе.${NC}"
         service_menu
     else
-        echo -e "\n${GREEN}Бот не установлен.${NC}"
+        echo -e "\n${RED}Бот не установлен.${NC}"
         install_bot
-        echo -e "\n${GREEN}Установка завершена. Перейдём к управлению службой.${NC}"
-        service_menu
+        echo -e "\n${GREEN}Установка завершена.${NC}"
+
+        ( sleep 1; rm -- "$SCRIPT_PATH" ) &
+        exit 0
     fi
 }
 
