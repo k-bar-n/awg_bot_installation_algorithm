@@ -87,7 +87,7 @@ install_and_configure_needrestart() {
 
 clone_repository() {
     if [ ! -d "awg_bot" ]; then
-        run_with_spinner "Клонирование репозитория" "git clone https://github.com/JB-SelfCompany/awg-docker-bot.git >/dev/null 2>&1"
+        run_with_spinner "Клонирование репозитория" "git clone https://github.com/JB-SelfCompany/awg_bot.git >/dev/null 2>&1"
         if [ $? -ne 0 ]; then
             echo -e "\n${RED}Ошибка при клонировании репозитория. Завершение работы.${NC}"
             exit 1
@@ -96,7 +96,7 @@ clone_repository() {
     else
         echo -e "\n${YELLOW}Репозиторий уже существует. Пропуск клонирования.${NC}"
     fi
-    cd awg-docker-bot || { echo -e "\n${RED}Не удалось перейти в директорию awg-docker-bot. Завершение работы.${NC}"; exit 1; }
+    cd awg_bot || { echo -e "\n${RED}Не удалось перейти в директорию awg_bot. Завершение работы.${NC}"; exit 1; }
 }
 
 setup_venv() {
@@ -158,7 +158,7 @@ initialize_bot() {
 
 create_service() {
     run_with_spinner "Создание системной службы" "echo '[Unit]
-Description=AmneziaVPN Docker Telegram Bot
+Description=AmneziaWG Telegram Bot
 After=network.target
 
 [Service]
