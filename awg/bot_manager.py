@@ -1,54 +1,83 @@
 import db
 import aiohttp
-import logging
 import asyncio
 import aiofiles
 import os
 import re
 import tempfile
 import json
-import subprocess
 import pytz
 import ipaddress
 import zipfile
+import humanize
+import logging
 from aiogram import Bot, types
 from aiogram.dispatcher import Dispatcher
+from aiogram.dispatcher.middlewares import BaseMiddleware
 from aiogram.utils import executor
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
 
+logging.basicConfig(level=logging.WARNING)
+logger = logging.getLogger(__name__)
+
+humanize.i18n.activate('ru')
+
 setting = db.get_config()
 bot = Bot(setting['bot_token'])
 admin = int(setting['admin_id'])
 WG_CONFIG_FILE = setting['wg_config_file']
+WG_CMD = 'awg' if 'amnezia' in WG_CONFIG_FILE.lower() else 'wg'
+WG_QUICK_CMD = 'awg-quick' if 'amnezia' in WG_CONFIG_FILE.lower() else 'wg-quick'
 
-if 'amnezia' in WG_CONFIG_FILE.lower():
-    WG_CMD = 'awg'
-    WG_QUICK_CMD = 'awg-quick'
-else:
-    WG_CMD = 'wg'
-    WG_QUICK_CMD = 'wg-quick'
+class AdminMessageDeletionMiddleware(BaseMiddleware):
+    async def on_process_message(self, message: types.Message, data: dict):
+        if message.from_user.id == admin:
+            asyncio.create_task(delete_message_after_delay(message.chat.id, message.message_id, delay=2))
 
 dp = Dispatcher(bot)
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler(timezone=pytz.UTC)
 scheduler.start()
 
+dp.middleware.setup(AdminMessageDeletionMiddleware())
+
 main_menu_markup = InlineKeyboardMarkup(row_width=1).add(
     InlineKeyboardButton("Добавить пользователя", callback_data="add_user"),
-    InlineKeyboardButton("Получить конфигурацию пользователя", callback_data="get_config"),
+    InlineKeyboardButton("Получить файлы пользователя", callback_data="get_config"),
     InlineKeyboardButton("Список клиентов", callback_data="list_users"),
     InlineKeyboardButton("Создать бекап", callback_data="create_backup"),
-    InlineKeyboardButton("Перезагрузить конфигурацию", callback_data="reload_config")
+    InlineKeyboardButton("Перезагрузить протокол", callback_data="reload_config")
 )
 
 user_main_messages = {}
 isp_cache = {}
 ISP_CACHE_FILE = 'files/isp_cache.json'
 CACHE_TTL = timedelta(hours=24)
+TRAFFIC_LIMITS_FILE = 'files/traffic_limits.json'
+previous_traffic = {}
+
+def load_traffic_limits():
+    if os.path.exists(TRAFFIC_LIMITS_FILE):
+        with open(TRAFFIC_LIMITS_FILE, 'r') as f:
+            limits = json.load(f)
+            for username, data in limits.items():
+                if 'limit' in data and isinstance(data['limit'], str):
+                    data['limit'] = int(data['limit'])
+                if 'used' in data and isinstance(data['used'], str):
+                    data['used'] = int(data['used'])
+                if 'prev_total' in data and isinstance(data['prev_total'], str):
+                    data['prev_total'] = int(data['prev_total'])
+            return limits
+    else:
+        return {}
+
+def save_traffic_limits(limits):
+    os.makedirs(os.path.dirname(TRAFFIC_LIMITS_FILE), exist_ok=True)
+    with open(TRAFFIC_LIMITS_FILE, 'w') as f:
+        json.dump(limits, f)
 
 async def load_isp_cache():
     global isp_cache
@@ -68,9 +97,8 @@ async def save_isp_cache():
 
 async def get_isp_info(ip: str) -> str:
     now = datetime.now(pytz.UTC)
-    if ip in isp_cache:
-        if now - isp_cache[ip]['timestamp'] < CACHE_TTL:
-            return isp_cache[ip]['isp']
+    if ip in isp_cache and now - isp_cache[ip]['timestamp'] < CACHE_TTL:
+        return isp_cache[ip]['isp']
     try:
         ip_obj = ipaddress.ip_address(ip)
         if ip_obj.is_private:
@@ -222,7 +250,6 @@ async def restart_wireguard():
         )
         stdout_strip, stderr_strip = await process_strip.communicate()
         if process_strip.returncode != 0:
-            logger.error(f"Strip WireGuard конфигурации не удался: {stderr_strip.decode()}")
             return False
         with tempfile.NamedTemporaryFile(delete=False) as temp_config:
             temp_config.write(stdout_strip)
@@ -233,14 +260,11 @@ async def restart_wireguard():
             stderr=asyncio.subprocess.PIPE
         )
         stdout_syncconf, stderr_syncconf = await process_syncconf.communicate()
-        if process_syncconf.returncode != 0:
-            os.unlink(temp_config_path)
-            logger.error(f"Syncconf WireGuard не удался: {stderr_syncconf.decode()}")
-            return False
         os.unlink(temp_config_path)
+        if process_syncconf.returncode != 0:
+            return False
         return True
-    except Exception as e:
-        logger.error(f"Ошибка при перезапуске WireGuard: {e}")
+    except:
         return False
 
 def create_zip(backup_filepath):
@@ -266,6 +290,14 @@ async def delete_message_after_delay(chat_id: int, message_id: int, delay: int):
     except:
         pass
 
+def format_vpn_key(vpn_key, num_lines=8):
+    line_length = len(vpn_key) // num_lines
+    if len(vpn_key) % num_lines != 0:
+        line_length += 1
+    lines = [vpn_key[i:i+line_length] for i in range(0, len(vpn_key), line_length)]
+    formatted_key = '\n'.join(lines)
+    return formatted_key
+
 @dp.message_handler(commands=['start', 'help'])
 async def help_command_handler(message: types.Message):
     if message.chat.id == admin:
@@ -286,8 +318,8 @@ async def handle_messages(message: types.Message):
     if user_main_messages.get('waiting_for_user_name'):
         user_name = message.text.strip()
         if not all(c.isalnum() or c in "-_" for c in user_name):
-            await message.reply("Имя пользователя может содержать только буквы, цифры, дефисы и подчёркивания.")
-            asyncio.create_task(delete_message_after_delay(message.chat.id, message.message_id, delay=5))
+            sent_message = await message.reply("Имя пользователя может содержать только буквы, цифры, дефисы и подчёркивания.")
+            asyncio.create_task(delete_message_after_delay(sent_message.chat.id, sent_message.message_id, delay=2))
             return
         user_main_messages['client_name'] = user_name
         user_main_messages['waiting_for_user_name'] = False
@@ -333,7 +365,8 @@ async def handle_messages(message: types.Message):
             else:
                 await message.answer("Ошибка: главное сообщение не найдено.")
     else:
-        await message.reply("Неизвестная команда или действие.")
+        sent_message = await message.reply("Неизвестная команда или действие.")
+        asyncio.create_task(delete_message_after_delay(sent_message.chat.id, sent_message.message_id, delay=2))
 
 @dp.callback_query_handler(lambda c: c.data == "add_user")
 async def prompt_for_user_name(callback_query: types.CallbackQuery):
@@ -389,26 +422,11 @@ async def connect_user(callback: types.CallbackQuery):
         await callback.answer("Ошибка: главное сообщение не найдено.", show_alert=True)
     await callback.answer()
 
-def parse_relative_time(time_str):
-    now = datetime.now(pytz.UTC)
-    delta = timedelta()
-    parts = time_str.strip().split(',')
-    for part in parts:
-        part = part.strip()
-        match = re.match(r'(\d+)\s+(day|hour|minute|second)s?', part)
-        if match:
-            value = int(match.group(1))
-            unit = match.group(2)
-            if unit == 'day':
-                delta += timedelta(days=value)
-            elif unit == 'hour':
-                delta += timedelta(hours=value)
-            elif unit == 'minute':
-                delta += timedelta(minutes=value)
-            elif unit == 'second':
-                delta += timedelta(seconds=value)
-    last_handshake_time = now - delta
-    return last_handshake_time
+def parse_relative_time(timestamp):
+    if timestamp == 'Never':
+        return None
+    else:
+        return datetime.now(pytz.UTC) - humanize.naturaldelta(timestamp)
 
 @dp.callback_query_handler(lambda c: c.data.startswith('duration_'))
 async def set_config_duration(callback: types.CallbackQuery):
@@ -434,9 +452,63 @@ async def set_config_duration(callback: types.CallbackQuery):
     elif duration_choice == 'unlimited':
         duration = None
     else:
-        await bot.send_message(admin, "Неверный выбор времени.", reply_markup=main_menu_markup, disable_notification=True)
-        asyncio.create_task(delete_message_after_delay(admin, main_message_id, delay=2))
+        sent_message = await bot.send_message(admin, "Неверный выбор времени.", reply_markup=main_menu_markup, disable_notification=True)
+        asyncio.create_task(delete_message_after_delay(admin, sent_message.message_id, delay=2))
         return
+    user_main_messages['duration'] = duration
+    user_main_messages['duration_choice'] = duration_choice
+    traffic_buttons = [
+        InlineKeyboardButton("5 GB", callback_data=f"traffic_5GB_{client_name}_{ipv6_flag}"),
+        InlineKeyboardButton("10 GB", callback_data=f"traffic_10GB_{client_name}_{ipv6_flag}"),
+        InlineKeyboardButton("30 GB", callback_data=f"traffic_30GB_{client_name}_{ipv6_flag}"),
+        InlineKeyboardButton("100 GB", callback_data=f"traffic_100GB_{client_name}_{ipv6_flag}"),
+        InlineKeyboardButton("Без ограничений", callback_data=f"traffic_unlimited_{client_name}_{ipv6_flag}"),
+        InlineKeyboardButton("Домой", callback_data="home")
+    ]
+    traffic_markup = InlineKeyboardMarkup(row_width=1).add(*traffic_buttons)
+    if main_chat_id and main_message_id:
+        await bot.edit_message_text(
+            chat_id=main_chat_id,
+            message_id=main_message_id,
+            text="Выберите лимит трафика:",
+            reply_markup=traffic_markup
+        )
+    else:
+        await callback.answer("Ошибка: главное сообщение не найдено.", show_alert=True)
+    await callback.answer()
+
+@dp.callback_query_handler(lambda c: c.data.startswith('traffic_'))
+async def set_traffic_limit(callback: types.CallbackQuery):
+    if callback.from_user.id != admin:
+        await callback.answer("У вас нет прав для выполнения этого действия.", show_alert=True)
+        return
+    parts = callback.data.split('_')
+    traffic_choice = parts[1]
+    client_name = parts[2]
+    ipv6_flag = parts[3] if len(parts) > 3 else 'noipv6'
+    main_chat_id, main_message_id = user_main_messages.get(admin, (None, None))
+    if not main_chat_id or not main_message_id:
+        await callback.answer("Ошибка: главное сообщение не найдено.", show_alert=True)
+        return
+    duration = user_main_messages.get('duration')
+    duration_choice = user_main_messages.get('duration_choice')
+    if traffic_choice == 'unlimited':
+        traffic_limit = None
+    else:
+        traffic_limit = int(traffic_choice.replace('GB', '')) * 1024 * 1024 * 1024
+    clients_transfer = db.get_all_clients_transfer()
+    user_transfer = next((ct for ct in clients_transfer if ct['username'] == client_name), None)
+    if user_transfer:
+        total_bytes = user_transfer['received_bytes'] + user_transfer['sent_bytes']
+    else:
+        total_bytes = 0
+    traffic_limits = load_traffic_limits()
+    traffic_limits[client_name] = {
+        'limit': traffic_limit,
+        'used': 0,
+        'prev_total': total_bytes
+    }
+    save_traffic_limits(traffic_limits)
     if ipv6_flag == 'ipv6':
         success = db.root_add(client_name, ipv6=True)
     else:
@@ -445,16 +517,13 @@ async def set_config_duration(callback: types.CallbackQuery):
         try:
             conf_path = os.path.join('users', client_name, f'{client_name}.conf')
             png_path = os.path.join('users', client_name, f'{client_name}.png')
-            
             if os.path.exists(png_path):
                 with open(png_path, 'rb') as photo:
                     sent_photo = await bot.send_photo(admin, photo, disable_notification=True)
                     asyncio.create_task(delete_message_after_delay(admin, sent_photo.message_id, delay=15))
-            
             vpn_key = ""
             if os.path.exists(conf_path):
                 vpn_key = await generate_vpn_key(conf_path)
-            
             if vpn_key:
                 instruction_text = (
                     "\nWireGuard [Google play](https://play.google.com/store/apps/details?id=com.wireguard.android), "
@@ -464,10 +533,11 @@ async def set_config_duration(callback: types.CallbackQuery):
                     "AmneziaVPN [Google play](https://play.google.com/store/apps/details?id=org.amnezia.vpn&hl=ru), "
                     "[GitHub](https://github.com/amnezia-vpn/amnezia-client)\n"
                 )
-                caption = f"\n{instruction_text}\n```{vpn_key}```"
+                formatted_key = format_vpn_key(vpn_key)
+                key_message = f"```\n{formatted_key}\n```"
+                caption = f"{instruction_text}\n{key_message}"
             else:
                 caption = "VPN ключ не был сгенерирован."
-    
             if os.path.exists(conf_path):
                 with open(conf_path, 'rb') as config:
                     sent_doc = await bot.send_document(
@@ -478,18 +548,15 @@ async def set_config_duration(callback: types.CallbackQuery):
                         disable_notification=True
                     )
                     asyncio.create_task(delete_message_after_delay(admin, sent_doc.message_id, delay=15))
-        
         except FileNotFoundError:
-            confirmation_text = "Не удалось найти файлы конфигурации для указанного пользователя."
-            sent_message = await bot.send_message(admin, confirmation_text, parse_mode="Markdown", disable_notification=True)
+            sent_message = await bot.send_message(admin, "Не удалось найти файлы конфигурации для указанного пользователя.", parse_mode="Markdown", disable_notification=True)
             asyncio.create_task(delete_message_after_delay(admin, sent_message.message_id, delay=15))
-            await callback_query.answer()
+            await callback.answer()
             return
-        except Exception as e:
-            confirmation_text = "Произошла ошибка."
-            sent_message = await bot.send_message(admin, confirmation_text, parse_mode="Markdown", disable_notification=True)
+        except:
+            sent_message = await bot.send_message(admin, "Произошла ошибка.", parse_mode="Markdown", disable_notification=True)
             asyncio.create_task(delete_message_after_delay(admin, sent_message.message_id, delay=15))
-            await callback_query.answer()
+            await callback.answer()
             return
         if duration:
             expiration_time = datetime.now(pytz.UTC) + duration
@@ -504,6 +571,11 @@ async def set_config_duration(callback: types.CallbackQuery):
         else:
             db.set_user_expiration(client_name, None)
             confirmation_text = f"Пользователь **{client_name}** добавлен с неограниченным временем действия."
+        if traffic_limit:
+            limit_str = humanize.naturalsize(traffic_limit, binary=True)
+            confirmation_text += f"\nЛимит трафика: {limit_str}"
+        else:
+            confirmation_text += f"\nЛимит трафика: ♾️ Неограниченно"
         sent_confirmation = await bot.send_message(
             chat_id=admin,
             text=confirmation_text,
@@ -512,10 +584,9 @@ async def set_config_duration(callback: types.CallbackQuery):
         )
         asyncio.create_task(delete_message_after_delay(admin, sent_confirmation.message_id, delay=15))
     else:
-        confirmation_text = "Не удалось добавить пользователя."
         sent_confirmation = await bot.send_message(
             chat_id=admin,
-            text=confirmation_text,
+            text="Не удалось добавить пользователя.",
             parse_mode="Markdown",
             disable_notification=True
         )
@@ -540,16 +611,13 @@ async def generate_vpn_key(conf_path: str) -> str:
         )
         stdout, stderr = await process.communicate()
         if process.returncode != 0:
-            logger.error(f"awg-decode.py ошибка: {stderr.decode().strip()}")
             return ""
         vpn_key = stdout.decode().strip()
         if vpn_key.startswith('vpn://'):
             return vpn_key
         else:
-            logger.error(f"awg-decode.py вернул некорректный формат: {vpn_key}")
             return ""
-    except Exception as e:
-        logger.error(f"Ошибка при вызове awg-decode.py: {e}")
+    except:
         return ""
 
 @dp.callback_query_handler(lambda c: c.data.startswith('list_users'))
@@ -565,26 +633,31 @@ async def list_users_callback(callback_query: types.CallbackQuery):
     active_clients_dict = {}
     for client in active_clients:
         username = client[0]
-        last_handshake = client[1]
-        active_clients_dict[username] = last_handshake
+        last_handshake_str = client[1]
+        active_clients_dict[username] = last_handshake_str
     keyboard = InlineKeyboardMarkup(row_width=2)
     now = datetime.now(pytz.UTC)
     for client in clients:
         username = client[0]
         last_handshake_str = active_clients_dict.get(username)
-        if last_handshake_str:
-            last_handshake = parse_relative_time(last_handshake_str)
+        if last_handshake_str and last_handshake_str != '0':
+            try:
+                last_handshake_time = datetime.fromtimestamp(int(last_handshake_str), pytz.UTC)
+                delta = now - last_handshake_time
+                delta_days = delta.days
+                if delta_days < 5:
+                    status_symbol = '🟢'
+                    days_str = f"{delta_days}d"
+                else:
+                    status_symbol = '🔴'
+                    days_str = "?d"
+            except ValueError:
+                status_symbol = '🔴'
+                days_str = "?d"
         else:
-            last_handshake = None
-        if last_handshake:
-            delta = now - last_handshake
-            if delta <= timedelta(days=5):
-                status_symbol = '✅'
-            else:
-                status_symbol = '❌'
-        else:
-            status_symbol = '❌'
-        button_text = f"{status_symbol} {username}"
+            status_symbol = '🔴'
+            days_str = "?d"
+        button_text = f"{status_symbol} ({days_str}) {username}"
         keyboard.insert(InlineKeyboardButton(button_text, callback_data=f"client_{username}"))
     keyboard.add(InlineKeyboardButton("Домой", callback_data="home"))
     main_chat_id, main_message_id = user_main_messages.get(admin, (None, None))
@@ -604,6 +677,25 @@ async def list_users_callback(callback_query: types.CallbackQuery):
             pass
     await callback_query.answer()
 
+def parse_size(size_str):
+    size_str = size_str.strip()
+    units = {'B':1, 'KB':1024, 'KIB':1024, 'MB':1024**2, 'MIB':1024**2, 'GB':1024**3, 'GIB':1024**3}
+    match = re.match(r'(\d+(?:\.\d+)?)\s*(\w+)', size_str, re.IGNORECASE)
+    if match:
+        value = float(match.group(1))
+        unit = match.group(2).upper()
+        factor = units.get(unit, 1)
+        return int(value * factor)
+    else:
+        return 0
+
+def parse_transfer(transfer_str):
+    match_received = re.search(r'(\d+)\s*bytes received', transfer_str, re.IGNORECASE)
+    match_sent = re.search(r'(\d+)\s*bytes sent', transfer_str, re.IGNORECASE)
+    received_bytes = int(match_received.group(1)) if match_received else 0
+    sent_bytes = int(match_sent.group(1)) if match_sent else 0
+    return received_bytes, sent_bytes
+
 @dp.callback_query_handler(lambda c: c.data.startswith('client_'))
 async def client_selected_callback(callback_query: types.CallbackQuery):
     _, username = callback_query.data.split('client_', 1)
@@ -615,7 +707,8 @@ async def client_selected_callback(callback_query: types.CallbackQuery):
         return
     is_blocked = is_user_blocked(username)
     expiration_time = db.get_user_expiration(username)
-    text = f"*Информация о пользователе {username}:*\n"
+    ipv4 = None
+    ipv6 = None
     if client_info[1]:
         ip_addresses = client_info[1].split(',')
         for ip in ip_addresses:
@@ -630,22 +723,44 @@ async def client_selected_callback(callback_query: types.CallbackQuery):
                 mask = ''
                 ip_with_mask = ip_adr
             if ':' in ip_adr:
-                text += f'  IPv6: {ip_with_mask}\n'
+                ipv6 = ip_with_mask
             elif '.' in ip_adr:
-                text += f'  IPv4: {ip_with_mask}\n'
-            else:
-                text += f'  IP: {ip_with_mask}\n'
-    else:
-        text += '  Нет IP-адресов.\n'
+                ipv4 = ip_with_mask
     active_clients = db.get_active_list()
     active_info = next((ac for ac in active_clients if ac[0] == username), None)
+    now = datetime.now(pytz.UTC)
     if active_info:
-        name, last_time, transfer, endpoint = active_info
-        text += f'  Последнее подключение: {last_time}\n'
-        text += f'  Передача данных: {transfer}\n'
-        text += f'  Endpoint: {endpoint}\n'
+        name, last_handshake_str, transfer_str, endpoint = active_info
+        if last_handshake_str and last_handshake_str != '0':
+            try:
+                last_handshake_time = datetime.fromtimestamp(int(last_handshake_str), pytz.UTC)
+                delta = (now - last_handshake_time).total_seconds()
+            except ValueError:
+                delta = None
+        else:
+            delta = None
+        if delta is not None and delta <= 120:
+            connection_status = '🟢 Онлайн'
+        else:
+            connection_status = '🔴 Офлайн'
+        received_bytes, sent_bytes = parse_transfer(transfer_str)
     else:
-        text += '  Нет активных подключений.\n'
+        connection_status = '🔴 Офлайн'
+        received_bytes = 0
+        sent_bytes = 0
+    traffic_limits = load_traffic_limits()
+    user_traffic = traffic_limits.get(username, {'limit': None, 'used': 0})
+    traffic_limit = user_traffic.get('limit')
+    traffic_used = user_traffic.get('used', 0)
+
+    if traffic_limit:
+        used_str = humanize.naturalsize(traffic_used, binary=True)
+        limit_str = humanize.naturalsize(traffic_limit, binary=True)
+        total_str = f"↑↓ {used_str} из {limit_str}"
+    else:
+        total_bytes = received_bytes + sent_bytes
+        total_str = f"↑↓ {humanize.naturalsize(total_bytes, binary=True)} из ♾️ Неограниченно"
+
     if expiration_time:
         now = datetime.now(pytz.UTC)
         expiration_dt = expiration_time
@@ -653,14 +768,23 @@ async def client_selected_callback(callback_query: types.CallbackQuery):
             expiration_dt = expiration_dt.replace(tzinfo=pytz.UTC)
         remaining = expiration_dt - now
         if remaining.total_seconds() > 0:
-            days, seconds = remaining.days, remaining.seconds
-            hours = seconds // 3600
-            minutes = (seconds % 3600) // 60
-            text += f'  Оставшееся время: {days}д {hours}ч {minutes}м\n'
-    if is_blocked:
-        text += '\n*Статус:* 🔴 Заблокирован'
+            expiration_str = humanize.naturaldelta(remaining, months=False, minimum_unit="seconds")
+        else:
+            expiration_str = 'Истекло'
     else:
-        text += '\n*Статус:* 🟢 Активен'
+        expiration_str = '♾️ Неограниченно'
+
+    text = f"📧 Имя: {username}\n"
+    if ipv4:
+        text += f"🌐 IPv4: {ipv4}\n"
+    if ipv6:
+        text += f"🌐 IPv6: {ipv6}\n"
+    text += f"🌐 Статус соединения: {connection_status}\n"
+    text += f"📅 {expiration_str}\n"
+    text += f"🔼 Исходящий трафик: ↑ {humanize.naturalsize(sent_bytes, binary=True)}\n"
+    text += f"🔽 Входящий трафик: ↓ {humanize.naturalsize(received_bytes, binary=True)}\n"
+    text += f"📊 Всего: {total_str}\n"
+
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
         InlineKeyboardButton("IP info", callback_data=f"ip_info_{username}"),
@@ -690,6 +814,36 @@ async def client_selected_callback(callback_query: types.CallbackQuery):
         await callback_query.answer("Ошибка: главное сообщение не найдено.", show_alert=True)
         return
     await callback_query.answer()
+
+async def update_traffic_usage():
+    traffic_limits = load_traffic_limits()
+    clients_transfer = db.get_all_clients_transfer()
+    for client in clients_transfer:
+        username = client['username']
+        received_bytes = client['received_bytes']
+        sent_bytes = client['sent_bytes']
+        total_bytes = received_bytes + sent_bytes
+        if username in traffic_limits:
+            user_traffic = traffic_limits[username]
+            prev_total = user_traffic.get('prev_total', total_bytes)
+            delta = total_bytes - prev_total
+            if delta < 0:
+                delta = 0
+            user_traffic['used'] += delta
+            user_traffic['prev_total'] = total_bytes
+            if user_traffic['limit'] and user_traffic['used'] >= user_traffic['limit']:
+                if not is_user_blocked(username):
+                    success = await block_user(username)
+                    if success:
+                        sent_message = await bot.send_message(
+                            admin,
+                            f"Пользователь **{username}** достиг лимита трафика и был заблокирован.",
+                            parse_mode="Markdown",
+                            disable_notification=True
+                        )
+                        asyncio.create_task(delete_message_after_delay(admin, sent_message.message_id, delay=15))
+            traffic_limits[username] = user_traffic
+    save_traffic_limits(traffic_limits)
 
 @dp.callback_query_handler(lambda c: c.data.startswith('connections_'))
 async def client_connections_callback(callback_query: types.CallbackQuery):
@@ -731,7 +885,6 @@ async def client_connections_callback(callback_query: types.CallbackQuery):
 async def ip_info_callback(callback_query: types.CallbackQuery):
     _, username = callback_query.data.split('ip_info_', 1)
     username = username.strip()
-
     active_clients = db.get_active_list()
     active_info = next((ac for ac in active_clients if ac[0] == username), None)
     if active_info:
@@ -740,9 +893,7 @@ async def ip_info_callback(callback_query: types.CallbackQuery):
     else:
         await callback_query.answer("Нет информации о подключении пользователя.", show_alert=True)
         return
-
     url = f"http://ip-api.com/json/{ip_address}?fields=message,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,org,as,hosting"
-
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as resp:
@@ -754,21 +905,17 @@ async def ip_info_callback(callback_query: types.CallbackQuery):
                 else:
                     await callback_query.answer(f"Ошибка при запросе к API: {resp.status}", show_alert=True)
                     return
-    except Exception as e:
-        logger.error(f"Ошибка при запросе к API: {e}")
+    except:
         await callback_query.answer("Ошибка при запросе к API.", show_alert=True)
         return
-
     info_text = f"*IP информация для {username}:*\n"
     for key, value in data.items():
         info_text += f"{key.capitalize()}: {value}\n"
-
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
         InlineKeyboardButton("Назад", callback_data=f"client_{username}"),
         InlineKeyboardButton("Домой", callback_data="home")
     )
-
     main_chat_id, main_message_id = user_main_messages.get(admin, (None, None))
     if main_chat_id and main_message_id:
         try:
@@ -779,14 +926,12 @@ async def ip_info_callback(callback_query: types.CallbackQuery):
                 parse_mode="Markdown",
                 reply_markup=keyboard
             )
-        except Exception as e:
-            logger.error(f"Ошибка при изменении сообщения: {e}")
+        except:
             await callback_query.answer("Ошибка при обновлении сообщения.", show_alert=True)
             return
     else:
         await callback_query.answer("Ошибка: главное сообщение не найдено.", show_alert=True)
         return
-
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data.startswith('delete_user_'))
@@ -806,8 +951,8 @@ async def client_delete_callback(callback_query: types.CallbackQuery):
                 os.remove(conf_path)
             if os.path.exists(png_path):
                 os.remove(png_path)
-        except Exception as e:
-            logger.error(f"Ошибка при удалении файлов для пользователя {username}: {e}")
+        except:
+            pass
         confirmation_text = f"Пользователь **{username}** успешно удален."
     else:
         confirmation_text = f"Не удалось удалить пользователя **{username}**."
@@ -837,23 +982,38 @@ async def client_block_callback(callback_query: types.CallbackQuery):
     else:
         await callback_query.answer("Неверная команда.", show_alert=True)
         return
-
     if action == 'block':
         success = await block_user(username)
-        if not success:
-            confirmation_text = f"Не удалось заблокировать пользователя **{username}**."
-        else:
-            confirmation_text = None
+        confirmation_text = None if success else f"Не удалось заблокировать пользователя **{username}**."
     else:
-        success = await unblock_user(username)
-        if not success:
-            confirmation_text = f"Не удалось разблокировать пользователя **{username}**."
+        traffic_limits = load_traffic_limits()
+        user_traffic = traffic_limits.get(username, {})
+        if user_traffic.get('limit') and user_traffic.get('used') >= user_traffic['limit']:
+            user_traffic['used'] = 0
+            traffic_limits[username] = user_traffic
+            save_traffic_limits(traffic_limits)
+            traffic_buttons = [
+                InlineKeyboardButton("5 GB", callback_data=f"reset_traffic_5GB_{username}"),
+                InlineKeyboardButton("10 GB", callback_data=f"reset_traffic_10GB_{username}"),
+                InlineKeyboardButton("30 GB", callback_data=f"reset_traffic_30GB_{username}"),
+                InlineKeyboardButton("100 GB", callback_data=f"reset_traffic_100GB_{username}"),
+                InlineKeyboardButton("Без ограничений", callback_data=f"reset_traffic_unlimited_{username}"),
+                InlineKeyboardButton("Домой", callback_data="home")
+            ]
+            traffic_markup = InlineKeyboardMarkup(row_width=1).add(*traffic_buttons)
+            await bot.edit_message_text(
+                chat_id=callback_query.message.chat.id,
+                message_id=callback_query.message.message_id,
+                text="Выберите новый лимит трафика для пользователя:",
+                reply_markup=traffic_markup
+            )
+            await callback_query.answer()
+            return
         else:
-            confirmation_text = None
-
+            success = await unblock_user(username)
+            confirmation_text = None if success else f"Не удалось разблокировать пользователя **{username}**."
     callback_query.data = f'client_{username}'
     await client_selected_callback(callback_query)
-
     if confirmation_text:
         sent_confirmation = await bot.send_message(
             chat_id=admin,
@@ -862,8 +1022,47 @@ async def client_block_callback(callback_query: types.CallbackQuery):
             disable_notification=True
         )
         asyncio.create_task(delete_message_after_delay(admin, sent_confirmation.message_id, delay=15))
-
     await callback_query.answer()
+
+@dp.callback_query_handler(lambda c: c.data.startswith('reset_traffic_'))
+async def reset_traffic_limit(callback: types.CallbackQuery):
+    if callback.from_user.id != admin:
+        await callback.answer("У вас нет прав для выполнения этого действия.", show_alert=True)
+        return
+    parts = callback.data.split('_')
+    traffic_choice = parts[2]
+    username = parts[3]
+    if traffic_choice == 'unlimited':
+        traffic_limit = None
+    else:
+        traffic_limit = int(traffic_choice.replace('GB', '')) * 1024 * 1024 * 1024
+    clients_transfer = db.get_all_clients_transfer()
+    user_transfer = next((ct for ct in clients_transfer if ct['username'] == username), None)
+    if user_transfer:
+        total_bytes = user_transfer['received_bytes'] + user_transfer['sent_bytes']
+    else:
+        total_bytes = 0
+    traffic_limits = load_traffic_limits()
+    traffic_limits[username] = {
+        'limit': traffic_limit,
+        'used': 0,
+        'prev_total': total_bytes
+    }
+    save_traffic_limits(traffic_limits)
+    success = await unblock_user(username)
+    if success:
+        confirmation_text = f"Пользователь **{username}** разблокирован. Новый лимит трафика установлен."
+    else:
+        confirmation_text = f"Не удалось разблокировать пользователя **{username}**."
+    await bot.send_message(
+        chat_id=admin,
+        text=confirmation_text,
+        parse_mode="Markdown",
+        disable_notification=True
+    )
+    callback.data = f'client_{username}'
+    await client_selected_callback(callback)
+    await callback.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "home")
 async def return_home(callback_query: types.CallbackQuery):
@@ -943,7 +1142,6 @@ async def send_user_config(callback_query: types.CallbackQuery):
             with open(png_path, 'rb') as photo:
                 sent_photo = await bot.send_photo(admin, photo, disable_notification=True)
                 sent_messages.append(sent_photo.message_id)
-
         conf_path = os.path.join('users', username, f'{username}.conf')
         if os.path.exists(conf_path):
             vpn_key = await generate_vpn_key(conf_path)
@@ -956,43 +1154,39 @@ async def send_user_config(callback_query: types.CallbackQuery):
                     "AmneziaVPN [Google play](https://play.google.com/store/apps/details?id=org.amnezia.vpn&hl=ru), "
                     "[GitHub](https://github.com/amnezia-vpn/amnezia-client)\n"
                 )
-                caption = f"\n{instruction_text}\n```{vpn_key}```"
+                formatted_key = format_vpn_key(vpn_key)
+                key_message = f"```\n{formatted_key}\n```"
+                caption = f"{instruction_text}\n{key_message}"
             else:
                 caption = "VPN ключ не был сгенерирован."
-
-            with open(conf_path, 'rb') as config:
-                sent_doc = await bot.send_document(
-                    admin,
-                    config,
-                    caption=caption,
-                    parse_mode="Markdown",
-                    disable_notification=True
-                )
-                sent_messages.append(sent_doc.message_id)
-        
-    except Exception as e:
-        confirmation_text = f"Произошла ошибка."
-        sent_message = await bot.send_message(admin, confirmation_text, parse_mode="Markdown", disable_notification=True)
+            if os.path.exists(conf_path):
+                with open(conf_path, 'rb') as config:
+                    sent_doc = await bot.send_document(
+                        admin,
+                        config,
+                        caption=caption,
+                        parse_mode="Markdown",
+                        disable_notification=True
+                    )
+                    sent_messages.append(sent_doc.message_id)
+    except:
+        sent_message = await bot.send_message(admin, "Произошла ошибка.", parse_mode="Markdown", disable_notification=True)
         asyncio.create_task(delete_message_after_delay(admin, sent_message.message_id, delay=15))
         await callback_query.answer()
         return
-
     if not sent_messages:
-        confirmation_text = f"Не удалось найти файлы конфигурации для пользователя **{username}**."
-        sent_message = await bot.send_message(admin, confirmation_text, parse_mode="Markdown", disable_notification=True)
+        sent_message = await bot.send_message(admin, f"Не удалось найти файлы конфигурации для пользователя **{username}**.", parse_mode="Markdown", disable_notification=True)
         asyncio.create_task(delete_message_after_delay(admin, sent_message.message_id, delay=15))
         await callback_query.answer()
         return
     else:
-        confirmation_text = f"Конфигурация для **{username}** отправлена."
         sent_confirmation = await bot.send_message(
             chat_id=admin,
-            text=confirmation_text,
+            text=f"Конфигурация для **{username}** отправлена.",
             parse_mode="Markdown",
             disable_notification=True
         )
         asyncio.create_task(delete_message_after_delay(admin, sent_confirmation.message_id, delay=15))
-    
     for message_id in sent_messages:
         asyncio.create_task(delete_message_after_delay(admin, message_id, delay=15))
     await callback_query.answer()
@@ -1012,10 +1206,8 @@ async def create_backup_callback(callback_query: types.CallbackQuery):
             with open(backup_filepath, 'rb') as f:
                 await bot.send_document(admin, f, caption=backup_filename, disable_notification=True)
         else:
-            logger.error(f"Бекап файл не создан: {backup_filepath}")
             await bot.send_message(admin, "Не удалось создать бекап.", disable_notification=True)
-    except Exception as e:
-        logger.error(f"Ошибка при создании бекапа: {e}")
+    except:
         await bot.send_message(admin, "Не удалось создать бекап.", disable_notification=True)
     await callback_query.answer()
 
@@ -1023,12 +1215,8 @@ async def create_backup_callback(callback_query: types.CallbackQuery):
 async def reload_config_callback(callback_query: types.CallbackQuery):
     if callback_query.from_user.id != admin:
         await callback_query.answer("У вас нет прав для выполнения этого действия.", show_alert=True)
-        logger.warning(f"Пользователь {callback_query.from_user.id} попытался перезагрузить конфигурацию без прав.")
         return
-
     interface_name = os.path.basename(WG_CONFIG_FILE).split('.')[0]
-    logger.info(f"Начинается перезагрузка конфигурации для интерфейса: {interface_name}")
-
     try:
         process_down = await asyncio.create_subprocess_shell(
             f"{WG_QUICK_CMD} down {interface_name}",
@@ -1037,11 +1225,7 @@ async def reload_config_callback(callback_query: types.CallbackQuery):
         )
         stdout_down, stderr_down = await process_down.communicate()
         if process_down.returncode != 0:
-            error_message = stderr_down.decode().strip()
-            logger.error(f"Ошибка при выполнении '{WG_QUICK_CMD} down {interface_name}': {error_message}")
-            raise Exception(f"Ошибка при выполнении '{WG_QUICK_CMD} down {interface_name}': {error_message}")
-        logger.info(f"Выполнена команда: {WG_QUICK_CMD} down {interface_name}")
-
+            raise Exception()
         process_up = await asyncio.create_subprocess_shell(
             f"{WG_QUICK_CMD} up {interface_name}",
             stdout=asyncio.subprocess.PIPE,
@@ -1049,17 +1233,9 @@ async def reload_config_callback(callback_query: types.CallbackQuery):
         )
         stdout_up, stderr_up = await process_up.communicate()
         if process_up.returncode != 0:
-            error_message = stderr_up.decode().strip()
-            logger.error(f"Ошибка при выполнении '{WG_QUICK_CMD} up {interface_name}': {error_message}")
-            raise Exception(f"Ошибка при выполнении '{WG_QUICK_CMD} up {interface_name}': {error_message}")
-        logger.info(f"Выполнена команда: {WG_QUICK_CMD} up {interface_name}")
-
-        logger.info(f"Конфигурация интерфейса {interface_name} успешно перезагружена.")
-
-    except Exception as e:
-        logger.exception(f"Ошибка при перезагрузке конфигурации: {e}")
-        await bot.send_message(admin, f"Ошибка при перезагрузке конфигурации: {e}", disable_notification=True)
-
+            raise Exception()
+    except:
+        await bot.send_message(admin, "Ошибка при перезагрузке конфигурации.", disable_notification=True)
     finally:
         main_chat_id, main_message_id = user_main_messages.get(admin, (None, None))
         if main_chat_id and main_message_id:
@@ -1070,19 +1246,15 @@ async def reload_config_callback(callback_query: types.CallbackQuery):
                     text="Выберите действие:",
                     reply_markup=main_menu_markup
                 )
-                logger.info("Главное меню обновлено после перезагрузки конфигурации.")
-            except MessageNotModified:
-                logger.info("Сообщение не изменилось при обновлении главного меню.")
-            except Exception as e:
-                logger.error(f"Ошибка при редактировании сообщения главного меню: {e}")
+            except:
+                pass
         else:
             try:
                 sent_message = await callback_query.message.reply("Выберите действие:", reply_markup=main_menu_markup)
                 user_main_messages[admin] = (sent_message.chat.id, sent_message.message_id)
                 await bot.pin_chat_message(chat_id=sent_message.chat.id, message_id=sent_message.message_id, disable_notification=True)
-                logger.info("Главное сообщение отправлено и закреплено после перезагрузки конфигурации.")
-            except Exception as e:
-                logger.error(f"Ошибка при отправке или закреплении главного сообщения: {e}")
+            except:
+                pass
         await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: True)
@@ -1099,8 +1271,8 @@ async def deactivate_user(client_name: str):
                 os.remove(conf_path)
             if os.path.exists(png_path):
                 os.remove(png_path)
-        except Exception as e:
-            logger.error(f"Ошибка при удалении файлов для пользователя {client_name}: {e}")
+        except:
+            pass
         sent_message = await bot.send_message(admin, f"Конфигурация пользователя **{client_name}** истекла и была деактивирована.", parse_mode="Markdown", disable_notification=True)
         asyncio.create_task(delete_message_after_delay(admin, sent_message.message_id, delay=15))
         db.remove_user_expiration(client_name)
@@ -1131,5 +1303,20 @@ async def on_startup(dp):
                 )
             else:
                 await deactivate_user(client_name)
+
+    traffic_limits = load_traffic_limits()
+    clients_transfer = db.get_all_clients_transfer()
+    for client in clients_transfer:
+        username = client['username']
+        received_bytes = client['received_bytes']
+        sent_bytes = client['sent_bytes']
+        total_bytes = received_bytes + sent_bytes
+        if username in traffic_limits:
+            user_traffic = traffic_limits[username]
+            user_traffic['prev_total'] = total_bytes
+            traffic_limits[username] = user_traffic
+    save_traffic_limits(traffic_limits)
+
+    scheduler.add_job(update_traffic_usage, 'interval', seconds=15)
 
 executor.start_polling(dp, on_startup=on_startup)
