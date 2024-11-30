@@ -43,30 +43,52 @@ run_with_spinner() {
     local description="$1"
     shift
     local cmd="$@"
-    local spinner='|/-\'
-    local i=0
 
     if [ "$ENABLE_LOGS" = true ]; then
-        echo -e "\n${BLUE}${description}...${NC}"
+        echo -e "${BLUE}${description}...${NC}"
         eval "$cmd"
         local status=$?
+        if [ $status -eq 0 ]; then
+            echo -e "${GREEN}${description}... Done!${NC}\n"
+        else
+            echo -e "${RED}${description}... Failed!${NC}"
+            echo -e "${RED}Ошибка при выполнении команды: $cmd${NC}\n"
+            exit 1
+        fi
     else
-        echo -ne "\n${BLUE}${description}... ${spinner:i++%${#spinner}:1}${NC}"
-        eval "$cmd" > /dev/null 2>&1 &
+        local stdout_temp=$(mktemp)
+        local stderr_temp=$(mktemp)
+
+        eval "$cmd" >"$stdout_temp" 2>"$stderr_temp" &
         local pid=$!
+
+        local spinner='|/-\'
+        local i=0
+
+        echo -ne "${BLUE}${description}...${NC} ${spinner:i++%${#spinner}:1}"
+
         while kill -0 "$pid" 2>/dev/null; do
-            printf "\r${BLUE}${description}... ${spinner:i++%${#spinner}:1}${NC}"
+            printf "\r${BLUE}${description}...${NC} ${spinner:i++%${#spinner}:1}"
             sleep 0.1
         done
+
         wait "$pid"
         local status=$?
-    fi
+        
+        if [ $status -eq 0 ]; then
+            printf "\r${BLUE}${description}...${NC} ${spinner:i%${#spinner}:1} ${GREEN}Done!${NC}\n\n"
+        else
+            printf "\r${BLUE}${description}...${NC} ${spinner:i%${#spinner}:1} ${RED}Failed!${NC}\n\n"
+            echo -e "${RED}Ошибка при выполнении команды: $cmd${NC}"
+            echo -e "${RED}Вывод ошибки:${NC}"
+            cat "$stderr_temp"
+        fi
 
-    if [ $status -eq 0 ]; then
-        echo -e "${GREEN}${description}... Done!${NC}\n"
-    else
-        echo -e "${RED}${description}... Failed!\nОшибка при выполнении команды: $cmd${NC}\n"
-        exit 1
+        rm -f "$stdout_temp" "$stderr_temp"
+
+        if [ $status -ne 0 ]; then
+            exit 1
+        fi
     fi
 }
 
@@ -157,9 +179,29 @@ check_python() {
     
     echo -e "\n${RED}Python 3.11 не установлен${NC}"
     read -p "Установить Python 3.11? (y/n): " install_python
+    
     if [[ "$install_python" =~ ^[Yy]$ ]]; then
+       if [[ "$UBUNTU_VERSION" == "24.04" ]]; then
+            local max_attempts=30
+            local attempt=1
+            
+            while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+                echo -e "${YELLOW}Ожидание освобождения dpkg lock (попытка $attempt из $max_attempts)${NC}"
+                attempt=$((attempt + 1))
+                if [ $attempt -gt $max_attempts ]; then
+                    echo -e "${RED}Превышено время ожидания освобождения dpkg lock${NC}"
+                    exit 1
+                fi
+                sleep 10
+            done
+        fi
+        
         run_with_spinner "Установка Python 3.11" "sudo apt-get install software-properties-common -y && sudo add-apt-repository ppa:deadsnakes/ppa -y && sudo apt-get update -qq && sudo apt-get install python3.11 python3.11-venv python3.11-dev -y -qq"
-        command -v python3.11 &>/dev/null || { echo -e "\n${RED}Не удалось установить Python 3.11${NC}"; exit 1; }
+            
+        if ! command -v python3.11 &>/dev/null; then
+            echo -e "\n${RED}Не удалось установить Python 3.11${NC}"
+            exit 1
+        fi
     else
         echo -e "\n${RED}Установка Python 3.11 обязательна${NC}"
         exit 1
@@ -177,16 +219,23 @@ install_and_configure_needrestart() {
 }
 
 clone_repository() {
-    [[ -d "awg_bot" ]] && { echo -e "\n${YELLOW}Репозиторий существует${NC}"; return 0; }
+    if [[ -d "awg_bot" ]]; then
+        echo -e "\n${YELLOW}Репозиторий существует${NC}"
+        cd awg_bot || { echo -e "\n${RED}Ошибка перехода в директорию${NC}"; exit 1; }
+        return 0
+    fi
     
     run_with_spinner "Клонирование репозитория" "git clone https://github.com/JB-SelfCompany/awg_bot.git >/dev/null 2>&1"
     cd awg_bot || { echo -e "\n${RED}Ошибка перехода в директорию${NC}"; exit 1; }
 }
 
 setup_venv() {
-    [[ -d "myenv" ]] && { echo -e "\n${YELLOW}Виртуальное окружение существует${NC}"; return 0; }
+    if [[ -d "myenv" ]]; then
+        echo -e "\n${YELLOW}Виртуальное окружение существует${NC}"
+        return 0
+    fi
     
-    run_with_spinner "Настройка виртуального окружения" "python3.11 -m venv myenv && source myenv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt && deactivate"
+    run_with_spinner "Настройка виртуального окружения" "python3.11 -m venv myenv && source myenv/bin/activate && pip install --upgrade pip && pip install -r $(pwd)/requirements.txt && deactivate"
 }
 
 set_permissions() {
