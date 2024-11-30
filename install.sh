@@ -71,19 +71,35 @@ run_with_spinner() {
 }
 
 check_updates() {
-    local changes=$(git pull)
+    local stdout_temp=$(mktemp)
+    local stderr_temp=$(mktemp)
+    
+    if ! git pull >"$stdout_temp" 2>"$stderr_temp"; then
+        echo -e "${RED}Ошибка при проверке обновлений:${NC}"
+        cat "$stderr_temp"
+        rm -f "$stdout_temp" "$stderr_temp"
+        echo
+        return 1
+    fi
+
+    local changes=$(cat "$stdout_temp")
+    rm -f "$stdout_temp" "$stderr_temp"
+
     if [[ "$changes" == "Already up to date." ]]; then
-        echo -e "${GREEN}Обновления не требуются${NC}"
-    else
+        echo -e "${GREEN}Обновления не требуются${NC}\n"
+    elif [[ -n "$changes" ]]; then
         echo -e "${GREEN}Обновления установлены:${NC}"
         echo "$changes"
+        echo
         read -p "Требуется перезапустить службу для применения обновлений. Перезапустить? (y/n): " restart
         if [[ "$restart" =~ ^[Yy]$ ]]; then
             run_with_spinner "Перезапуск службы" "sudo systemctl restart $SERVICE_NAME -qq"
-            echo -e "${GREEN}Служба перезапущена${NC}"
+            echo -e "${GREEN}Служба перезапущена${NC}\n"
         else
-            echo -e "${YELLOW}Для применения обновлений требуется перезапустить службу${NC}"
+            echo -e "${YELLOW}Для применения обновлений требуется перезапустить службу${NC}\n"
         fi
+    else
+        echo -e "${RED}Неожиданный ответ при проверке обновлений${NC}\n"
     fi
 }
 
