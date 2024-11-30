@@ -12,68 +12,109 @@ from datetime import datetime
 EXPIRATIONS_FILE = 'files/expirations.json'
 UTC = pytz.UTC
 
+def check_installed_vpn():
+    installed_vpn = []
+    try:
+        wg_check = subprocess.run('dpkg -l | grep wireguard', 
+                                shell=True, capture_output=True, text=True)
+        if 'ii  wireguard' in wg_check.stdout:
+            installed_vpn.append("WireGuard")
+
+        amnezia_check = subprocess.run('dpkg -l | grep amneziawg', 
+                                     shell=True, capture_output=True, text=True)
+        if 'ii  amneziawg' in amnezia_check.stdout:
+            installed_vpn.append("AmneziaWG")
+
+    except subprocess.CalledProcessError:
+        pass
+    return installed_vpn
+
 def create_config(path='files/setting.ini'):
-    wireguard_dir = "/etc/wireguard"
-    amnezia_dir = "/etc/amnezia/amneziawg"
-    conf_files = []
-
-    for dir_path in [wireguard_dir, amnezia_dir]:
-        if os.path.exists(dir_path):
-            conf_files.extend(glob.glob(os.path.join(dir_path, "*.conf")))
-
-    selected_conf = None
-    if conf_files:
-        print("Выберите конфигурационный файл:")
-        for idx, conf in enumerate(conf_files, 1):
-            print(f"{idx}) {conf}")
-        while True:
-            choice = input("Введите номер: ").strip() or "1"
-            if choice.isdigit() and 1 <= int(choice) <= len(conf_files):
-                selected_conf = conf_files[int(choice) - 1]
-                break
-            else:
-                print("Неверный выбор. Пожалуйста, введите корректный номер.")
-    else:
-        dirs_exist = False
-        for dir_path in [wireguard_dir, amnezia_dir]:
-            if os.path.exists(dir_path):
-                dirs_exist = True
-                confs = glob.glob(os.path.join(dir_path, "*.conf"))
-                if not confs:
-                    config_type = "AmneziaWG" if 'amnezia' in dir_path else "WireGuard"
-                    print(f"В системе установлен {config_type}, но не обнаружено конфигурационного файла.")
-                    print("Перейти к его созданию?")
-                    print("1) Да")
-                    print("2) Нет")
-                    while True:
-                        user_choice = input("Введите номер: ").strip()
-                        if user_choice == "1":
-                            subprocess.run(["./genconf.sh"])
-                            conf_files = glob.glob(os.path.join(dir_path, "*.conf"))
-                            if conf_files:
-                                selected_conf = conf_files[0]
-                                break
-                            else:
-                                print("Не удалось создать конфигурационный файл.")
-                                sys.exit(1)
-                        elif user_choice == "2":
-                            print("Инициализация не завершена.")
-                            sys.exit(0)
-                        else:
-                            print("Неверный выбор. Пожалуйста, введите 1 или 2.")
-        if not dirs_exist:
-            print("WireGuard или AmneziaWG не установлены в системе.")
-            print("Инициализация не завершена.")
-            sys.exit(0)
-
-    bot_token = input("Введите токен Telegram бота: ").strip()
-    admin_id = input("Введите Telegram ID администратора: ").strip()
     try:
         endpoint = subprocess.check_output("curl -s https://api.ipify.org", shell=True).decode().strip()
         socket.inet_aton(endpoint)
     except (subprocess.CalledProcessError, socket.error):
         print("Ошибка при определении внешнего IP-адреса сервера.")
         endpoint = input('Не удалось автоматически определить внешний IP-адрес. Пожалуйста, введите его вручную: ').strip()
+        try:
+            socket.inet_aton(endpoint)
+        except socket.error:
+            print("Введён некорректный IP-адрес. Инициализация прервана.")
+            sys.exit(1)
+
+    wireguard_dir = "/etc/wireguard"
+    amnezia_dir = "/etc/amnezia/amneziawg"
+
+    installed_vpn = check_installed_vpn()
+    if not installed_vpn:
+        print("AmneziaWG или WireGuard не установлен в системе. Инициализация не завершена.")
+        sys.exit(0)
+
+    configs = []
+    if "WireGuard" in installed_vpn and os.path.exists(wireguard_dir):
+        configs.extend(glob.glob(os.path.join(wireguard_dir, "*.conf")))
+    if "AmneziaWG" in installed_vpn and os.path.exists(amnezia_dir):
+        configs.extend(glob.glob(os.path.join(amnezia_dir, "*.conf")))
+
+    print(f"В системе установлены: {', '.join(installed_vpn)}\n")
+
+    if configs:
+        print("Доступные конфигурации:")
+        for idx, conf in enumerate(configs, 1):
+            print(f"{idx}) {conf}")
+        print(f"{len(configs) + 1}) Создать новую конфигурацию")
+
+        while True:
+            choice = input("\nВведите номер: ").strip()
+            if choice.isdigit():
+                choice = int(choice)
+                if 1 <= choice <= len(configs):
+                    selected_conf = configs[choice - 1]
+                    break
+                elif choice == len(configs) + 1:
+                    subprocess.run(["./genconf.sh"])
+                    new_configs = []
+                    if "WireGuard" in installed_vpn:
+                        new_configs.extend(glob.glob(os.path.join(wireguard_dir, "*.conf")))
+                    if "AmneziaWG" in installed_vpn:
+                        new_configs.extend(glob.glob(os.path.join(amnezia_dir, "*.conf")))
+                    new_config = set(new_configs) - set(configs)
+                    if new_config:
+                        selected_conf = list(new_config)[0]
+                        break
+                    else:
+                        print("Не удалось найти новую конфигурацию")
+                        sys.exit(1)
+            print("Неверный выбор. Пожалуйста, введите корректный номер.")
+    else:
+        print("Конфигурации отсутствуют\n")
+        print("Создать новую конфигурацию?\n")
+        print("1) Да")
+        print("2) Нет")
+
+        while True:
+            choice = input("Введите номер: ").strip()
+            if choice == "1":
+                subprocess.run(["./genconf.sh"])
+                new_configs = []
+                if "WireGuard" in installed_vpn:
+                    new_configs.extend(glob.glob(os.path.join(wireguard_dir, "*.conf")))
+                if "AmneziaWG" in installed_vpn:
+                    new_configs.extend(glob.glob(os.path.join(amnezia_dir, "*.conf")))
+                if new_configs:
+                    selected_conf = new_configs[0]
+                    break
+                else:
+                    print("Не удалось создать конфигурацию")
+                    sys.exit(1)
+            elif choice == "2":
+                print("Инициализация не завершена")
+                sys.exit(0)
+            else:
+                print("Неверный выбор. Пожалуйста, введите 1 или 2")
+
+    bot_token = input("Введите токен Telegram бота: ").strip()
+    admin_id = input("Введите Telegram ID администратора: ").strip()
 
     os.makedirs("files", exist_ok=True)
     with open(path, "w") as f:

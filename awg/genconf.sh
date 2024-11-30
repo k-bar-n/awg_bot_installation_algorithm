@@ -2,15 +2,12 @@
 
 detect_available_configs() {
     available_types=()
-
-    if [[ -d "/etc/amnezia/amneziawg" ]]; then
+    if dpkg -l | grep -q "^ii\s\+wireguard\s"; then
+        available_types+=("WireGuard")
+    fi
+    if dpkg -l | grep -q "^ii\s\+amneziawg\s"; then
         available_types+=("AmneziaWG")
     fi
-
-    if [[ -d "/etc/wireguard" ]]; then
-        available_types+=("Wireguard")
-    fi
-
     if [[ ${#available_types[@]} -eq 0 ]]; then
         echo "Ошибка: WireGuard и AmneziaWG не установлены в системе." >&2
         exit 1
@@ -25,11 +22,9 @@ choose_config_type() {
     done
     echo -n "Введите номер: " >&2
     read config_choice
-
     if [[ -z "$config_choice" ]]; then
         config_choice=1
     fi
-
     while [[ ! "$config_choice" =~ ^[1-${#available_types[@]}]$ ]]; do
         echo "Неверный выбор. Пожалуйста, введите число от 1 до ${#available_types[@]}." >&2
         echo -n "Введите номер: " >&2
@@ -38,36 +33,28 @@ choose_config_type() {
             config_choice=1
         fi
     done
-
     CONFIG_TYPE="${available_types[$((config_choice - 1))]}"
 }
 
 check_installed() {
-    if [[ "$CONFIG_TYPE" == "AmneziaWG" ]]; then
-        if ! command -v awg >/dev/null 2>&1; then
-            echo "AmneziaWG не установлен в системе. Обратитесь к ресурсу https://github.com/amnezia-vpn/amneziawg-linux-kernel-module" >&2
-            exit 1
-        fi
-    elif [[ "$CONFIG_TYPE" == "Wireguard" ]]; then
-        if ! command -v wg >/dev/null 2>&1; then
-            echo "WireGuard не установлен в системе. Обратитесь к ресурсу https://www.wireguard.com/install" >&2
-            exit 1
-        fi
+    if [[ "$CONFIG_TYPE" == "AmneziaWG" && ! $(command -v awg) ]]; then
+        echo "AmneziaWG не установлен в системе. Обратитесь к ресурсу https://github.com/amnezia-vpn/amneziawg-linux-kernel-module" >&2
+        exit 1
+    elif [[ "$CONFIG_TYPE" == "WireGuard" && ! $(command -v wg) ]]; then
+        echo "WireGuard не установлен в системе. Обратитесь к ресурсу https://www.wireguard.com/install" >&2
+        exit 1
     fi
 }
 
 is_port_used() {
     local port=$1
     local config_dir=$2
-
     if grep -Eq "^ListenPort\s*=\s*$port" "$config_dir"/*.conf 2>/dev/null; then
         return 0
     fi
-
     if ss -tuln | grep -w ":$port " >/dev/null 2>&1 || netstat -tuln | grep -w ":$port " >/dev/null 2>&1; then
         return 0
     fi
-
     return 1
 }
 
@@ -76,7 +63,6 @@ choose_port() {
         echo -n "Какой порт использовать? " >&2
         read port
         if [[ "$port" =~ ^[0-9]+$ && "$port" -ge 1 && "$port" -le 65535 ]]; then
-            # Проверка, занят ли порт
             if is_port_used "$port" "$config_dir"; then
                 echo "Порт $port уже занят. Пожалуйста, выберите другой порт." >&2
             else
@@ -144,7 +130,6 @@ choose_dns() {
             dns_choice=1
         fi
     done
-
     case "$dns_choice" in
         1)
             dns_servers=$(grep '^nameserver' /etc/resolv.conf | awk '{print $2}' | paste -sd ", " -)
@@ -155,21 +140,11 @@ choose_dns() {
                 DNS="$dns_servers"
             fi
             ;;
-        2)
-            DNS="8.8.8.8"
-            ;;
-        3)
-            DNS="1.1.1.1"
-            ;;
-        4)
-            DNS="208.67.222.222, 208.67.220.220"
-            ;;
-        5)
-            DNS="9.9.9.9, 149.112.112.112"
-            ;;
-        6)
-            DNS="94.140.14.14, 94.140.15.15"
-            ;;
+        2) DNS="8.8.8.8" ;;
+        3) DNS="1.1.1.1" ;;
+        4) DNS="208.67.222.222, 208.67.220.220" ;;
+        5) DNS="9.9.9.9, 149.112.112.112" ;;
+        6) DNS="94.140.14.14, 94.140.15.15" ;;
         7)
             echo -n "Введите DNS-серверы (разделенные пробелом, например: 1.1.1.1 8.8.4.4): " >&2
             read custom_dns
@@ -187,37 +162,24 @@ choose_dns() {
                 choose_dns
             fi
             ;;
-        *)
-            DNS="8.8.8.8"
-            ;;
+        *) DNS="8.8.8.8" ;;
     esac
 }
 
 generate_private_key() {
-    local type=$1
-    if [[ "$type" == "AmneziaWG" ]]; then
-        private_key=$(awg genkey)
-    else
-        private_key=$(wg genkey)
-    fi
-    echo "$private_key"
+    [[ "$1" == "AmneziaWG" ]] && awg genkey || wg genkey
 }
 
 get_next_config_number() {
-    local dir=$1
-    local prefix=$2
-    local current_number=0
+    local dir=$1 prefix=$2 current_number=0
     while [[ -f "$dir/${prefix}${current_number}.conf" ]]; do
-        current_number=$((current_number +1))
+        ((current_number++))
     done
     echo "$current_number"
 }
 
 get_next_subnet() {
-    local dir=$1
-    local subnet_prefix="10"
-    local max_octet=255
-
+    local dir=$1 subnet_prefix="10" max_octet=255
     used_subnets=()
     shopt -s nullglob
     for file in "$dir"/*.conf; do
@@ -229,7 +191,6 @@ get_next_subnet() {
         done
     done
     shopt -u nullglob
-
     for x in $(seq 0 $max_octet); do
         for y in $(seq 0 $max_octet); do
             subnet="10.$x.$y.0/24"
@@ -239,21 +200,58 @@ get_next_subnet() {
             fi
         done
     done
-
     echo ""
     return 1
 }
 
 assign_subnet() {
-    local subnet=$1
-    local ip6_address=$2
+    local subnet=$1 ip6_address=$2
     local address="${subnet%.*}.1/24"
-
-    if [[ -n "$ip6_address" ]]; then
-        address="${address}, ${ip6_address}"
-    fi
-
+    [[ -n "$ip6_address" ]] && address="${address}, ${ip6_address}"
     echo "$address"
+}
+
+generate_config() {
+    local config_file=$1 address=$2
+    if [[ "$CONFIG_TYPE" == "AmneziaWG" ]]; then
+        cat > "$config_file" << EOF
+[Interface]
+Address = $address
+
+DNS = $DNS
+
+Jc = 4
+Jmin = 15
+Jmax = 1268
+S1 = 131
+S2 = 45
+H1 = 1004746675
+H2 = 1157755290
+H3 = 1273046607
+H4 = 2137162994
+
+ListenPort = $PORT
+
+PrivateKey = $private_key
+
+PostUp = iptables -t nat -A POSTROUTING -o \$(ip route | awk '/default/ {print \$5; exit}') -j MASQUERADE
+PostDown = iptables -t nat -D POSTROUTING -o \$(ip route | awk '/default/ {print \$5; exit}') -j MASQUERADE
+EOF
+    else
+        cat > "$config_file" << EOF
+[Interface]
+Address = $address
+
+DNS = $DNS
+
+ListenPort = $PORT
+
+PrivateKey = $private_key
+
+PostUp = iptables -t nat -A POSTROUTING -o \$(ip route | awk '/default/ {print \$5; exit}') -j MASQUERADE
+PostDown = iptables -t nat -D POSTROUTING -o \$(ip route | awk '/default/ {print \$5; exit}') -j MASQUERADE
+EOF
+    fi
 }
 
 detect_available_configs
@@ -262,13 +260,14 @@ choose_config_type
 if [[ "$CONFIG_TYPE" == "AmneziaWG" ]]; then
     config_dir="/etc/amnezia/amneziawg"
     config_prefix="awg"
-elif [[ "$CONFIG_TYPE" == "Wireguard" ]]; then
+else
     config_dir="/etc/wireguard"
     config_prefix="wg"
 fi
 
 check_installed
-mkdir -p "$config_dir"
+[[ ! -d "$config_dir" ]] && mkdir -p "$config_dir"
+
 choose_port
 ip6_address=$(choose_ipv6)
 choose_dns
@@ -277,63 +276,11 @@ config_number=$(get_next_config_number "$config_dir" "$config_prefix")
 config_file="${config_dir}/${config_prefix}${config_number}.conf"
 interface_name="${config_prefix}${config_number}"
 
-if [[ "$CONFIG_TYPE" == "AmneziaWG" ]]; then
-    Jc=4
-    Jmin=15
-    Jmax=1268
-    S1=131
-    S2=45
-    H1=1004746675
-    H2=1157755290
-    H3=1273046607
-    H4=2137162994
-fi
-
 subnet=$(get_next_subnet "$config_dir")
-if [[ -z "$subnet" ]]; then
-    echo "Ошибка: Все возможные подсети 10.x.y.0/24 заняты. Генерация невозможна." >&2
-    exit 1
-fi
+[[ -z "$subnet" ]] && { echo "Ошибка: Все возможные подсети 10.x.y.0/24 заняты." >&2; exit 1; }
 
 address=$(assign_subnet "$subnet" "$ip6_address")
-
-if [[ "$CONFIG_TYPE" == "AmneziaWG" ]]; then
-    cat <<EOF > "$config_file"
-[Interface]
-Address = $address
-DNS = $DNS
-
-Jc = $Jc
-Jmin = $Jmin
-Jmax = $Jmax
-S1 = $S1
-S2 = $S2
-H1 = $H1
-H2 = $H2
-H3 = $H3
-H4 = $H4
-
-ListenPort = $PORT
-PrivateKey = $private_key
-
-PostUp = iptables -t nat -A POSTROUTING -o \$(ip route | awk '/default/ {print \$5; exit}') -j MASQUERADE
-PostDown = iptables -t nat -D POSTROUTING -o \$(ip route | awk '/default/ {print \$5; exit}') -j MASQUERADE
-EOF
-    echo "Конфигурация AmneziaWG создана: $config_file" >&2
-elif [[ "$CONFIG_TYPE" == "Wireguard" ]]; then
-    cat <<EOF > "$config_file"
-[Interface]
-Address = $address
-DNS = $DNS
-
-ListenPort = $PORT
-PrivateKey = $private_key
-
-PostUp = iptables -t nat -A POSTROUTING -o \$(ip route | awk '/default/ {print \$5; exit}') -j MASQUERADE
-PostDown = iptables -t nat -D POSTROUTING -o \$(ip route | awk '/default/ {print \$5; exit}') -j MASQUERADE
-EOF
-    echo "Конфигурация Wireguard создана: $config_file" >&2
-fi
+generate_config "$config_file" "$address"
 
 chmod 600 "$config_file"
 echo "Генерация конфигурации завершена успешно." >&2
@@ -341,7 +288,7 @@ echo "Генерация конфигурации завершена успеш�
 if [[ "$CONFIG_TYPE" == "AmneziaWG" ]]; then
     awg-quick up "$interface_name"
     systemctl enable awg-quick@"$interface_name"
-elif [[ "$CONFIG_TYPE" == "Wireguard" ]]; then
+else
     wg-quick up "$interface_name"
     systemctl enable wg-quick@"$interface_name"
 fi

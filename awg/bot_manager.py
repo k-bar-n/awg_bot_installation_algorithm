@@ -781,8 +781,8 @@ async def client_selected_callback(callback_query: types.CallbackQuery):
         text += f"🌐 IPv6: {ipv6}\n"
     text += f"🌐 Статус соединения: {connection_status}\n"
     text += f"📅 {expiration_str}\n"
-    text += f"🔼 Исходящий трафик: ↑ {humanize.naturalsize(sent_bytes, binary=True)}\n"
-    text += f"🔽 Входящий трафик: ↓ {humanize.naturalsize(received_bytes, binary=True)}\n"
+    text += f"🔼 Исходящий трафик: ↑ {humanize.naturalsize(received_bytes, binary=True)}\n"
+    text += f"🔽 Входящий трафик: ↓ {humanize.naturalsize(sent_bytes, binary=True)}\n"
     text += f"📊 Всего: {total_str}\n"
 
     keyboard = InlineKeyboardMarkup(row_width=2)
