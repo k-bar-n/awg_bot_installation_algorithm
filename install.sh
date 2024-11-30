@@ -107,18 +107,18 @@ service_control_menu() {
     while true; do
         echo -e "\n${BLUE}=== Управление службой $SERVICE_NAME ===${NC}"
         sudo systemctl status "$SERVICE_NAME" | grep -E "Active:|Loaded:"
-        echo -e "\n${GREEN}1${NC}. Установить службу"
-        echo -e "${GREEN}2${NC}. Остановить службу"
-        echo -e "${GREEN}3${NC}. Перезапустить службу"
+        echo -e "\n${GREEN}1${NC}. Остановить службу"
+        echo -e "${GREEN}2${NC}. Перезапустить службу"
+        echo -e "${GREEN}3${NC}. Переустановить службу"
         echo -e "${RED}4${NC}. Удалить службу"
         echo -e "${YELLOW}5${NC}. Назад"
         
         echo -ne "\n${BLUE}Выберите действие:${NC} "
         read action
         case $action in
-            1) create_service ;;
-            2) run_with_spinner "Остановка службы" "sudo systemctl stop $SERVICE_NAME -qq" ;;
-            3) run_with_spinner "Перезапуск службы" "sudo systemctl restart $SERVICE_NAME -qq" ;;
+            1) run_with_spinner "Остановка службы" "sudo systemctl stop $SERVICE_NAME -qq" ;;
+            2) run_with_spinner "Перезапуск службы" "sudo systemctl restart $SERVICE_NAME -qq" ;;
+            3) create_service ;;
             4) run_with_spinner "Удаление службы" "sudo systemctl stop $SERVICE_NAME -qq && sudo systemctl disable $SERVICE_NAME -qq && sudo rm /etc/systemd/system/$SERVICE_NAME.service && sudo systemctl daemon-reload -qq" ;;
             5) return 0 ;;
             *) echo -e "${RED}Некорректный ввод${NC}" ;;
