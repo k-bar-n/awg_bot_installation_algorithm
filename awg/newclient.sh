@@ -187,13 +187,13 @@ EOF
 
     if [[ "$WG_CONFIG_FILE" == *amnezia* ]]; then
         cat << EOF >> "$pwd/users/$CLIENT_NAME/$CLIENT_NAME.conf"
-    jc=$(get_value "Jc")
-    jmin=$(get_value "Jmin")
-    jmax=$(get_value "Jmax")
-    h1=$(get_value "H1")
-    h2=$(get_value "H2")
-    h3=$(get_value "H3")
-    h4=$(get_value "H4")
+    Jc=$(get_value "Jc")
+    Jmin=$(get_value "Jmin")
+    Jmax=$(get_value "Jmax")
+    H1=$(get_value "H1")
+    H2=$(get_value "H2")
+    H3=$(get_value "H3")
+    H4=$(get_value "H4")
 EOF
     fi
 
@@ -216,13 +216,13 @@ EOF
 
     if [[ "$WG_CONFIG_FILE" == *amnezia* ]]; then
         cat << EOF >> "$pwd/users/$CLIENT_NAME/$CLIENT_NAME.conf"
-    jc=$(get_value "Jc")
-    jmin=$(get_value "Jmin")
-    jmax=$(get_value "Jmax")
-    h1=$(get_value "H1")
-    h2=$(get_value "H2")
-    h3=$(get_value "H3")
-    h4=$(get_value "H4")
+    Jc=$(get_value "Jc")
+    Jmin=$(get_value "Jmin")
+    Jmax=$(get_value "Jmax")
+    H1=$(get_value "H1")
+    H2=$(get_value "H2")
+    H3=$(get_value "H3")
+    H4=$(get_value "H4")
 EOF
     fi
 
