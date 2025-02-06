@@ -33,7 +33,7 @@ else
     IPV6="no"
 fi
 
-WG_QUICK_CMD="${WG_CMD}-quick"
+#WG_QUICK_CMD="${WG_CMD}-quick"
 
 if [[ ! "$CLIENT_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
     echo "Error: Invalid CLIENT_NAME. Only letters, numbers, underscores, and hyphens are allowed."
@@ -63,7 +63,7 @@ if [ -z "$internal_subnet" ]; then
 fi
 
 IFS='/' read -r subnet base_prefix <<< "$internal_subnet"
-IFS='.' read -r a b c d <<< "$subnet"
+IFS='.' read -r a b c <<< "$subnet"
 
 if [ "$base_prefix" -ne 24 ]; then
     echo "Error: Unsupported subnet prefix. Only /24 is supported."
@@ -88,17 +88,17 @@ mkdir -p "$pwd/users/$CLIENT_NAME"
 key=$($WG_CMD genkey)
 psk=$($WG_CMD genpsk)
 
-if [[ "$WG_CONFIG_FILE" == *amnezia* ]]; then
-    jc=4
-    jmin=15
-    jmax=1268
-    s1=131
-    s2=45
-    h1=1004746675
-    h2=1157755290
-    h3=1273046607
-    h4=2137162994
-fi
+get_value() {
+    local key="$1"
+    value=$(awk -F '=' -v k="$key" '$1 ~ k {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}' "$WG_CONFIG_FILE")
+
+    if [[ -z "$value" ]]; then
+        value=0
+        echo "Значение для '$key' не найдено. Устанавливаем в 0."
+    fi
+
+    echo "$value"
+}
 
 dns_servers=$(awk '/^\[Interface\]/ {flag=1; next} /^\[/ {flag=0} flag && /^DNS\s*=/ {
     gsub(/DNS\s*=\s*/, "")
@@ -187,15 +187,13 @@ EOF
 
     if [[ "$WG_CONFIG_FILE" == *amnezia* ]]; then
         cat << EOF >> "$pwd/users/$CLIENT_NAME/$CLIENT_NAME.conf"
-Jc = 4
-Jmin = 15
-Jmax = 1268
-S1 = 131
-S2 = 45
-H1 = 1004746675
-H2 = 1157755290
-H3 = 1273046607
-H4 = 2137162994
+    jc=$(get_value "Jc")
+    jmin=$(get_value "Jmin")
+    jmax=$(get_value "Jmax")
+    h1=$(get_value "H1")
+    h2=$(get_value "H2")
+    h3=$(get_value "H3")
+    h4=$(get_value "H4")
 EOF
     fi
 
@@ -218,15 +216,13 @@ EOF
 
     if [[ "$WG_CONFIG_FILE" == *amnezia* ]]; then
         cat << EOF >> "$pwd/users/$CLIENT_NAME/$CLIENT_NAME.conf"
-Jc = 4
-Jmin = 15
-Jmax = 1268
-S1 = 131
-S2 = 45
-H1 = 1004746675
-H2 = 1157755290
-H3 = 1273046607
-H4 = 2137162994
+    jc=$(get_value "Jc")
+    jmin=$(get_value "Jmin")
+    jmax=$(get_value "Jmax")
+    h1=$(get_value "H1")
+    h2=$(get_value "H2")
+    h3=$(get_value "H3")
+    h4=$(get_value "H4")
 EOF
     fi
 
